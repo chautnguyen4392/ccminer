@@ -649,6 +649,7 @@ extern bool hex2bin(void *output, const char *hexstr, size_t len);
 extern int timeval_subtract(struct timeval *result, struct timeval *x,
 	struct timeval *y);
 extern bool fulltest(const uint32_t *hash, const uint32_t *target);
+extern char* get_target_string(const uint32_t *hash);
 void diff_to_target(uint32_t* target, double diff);
 void work_set_target(struct work* work, double diff);
 double target_to_diff(uint32_t* target);
