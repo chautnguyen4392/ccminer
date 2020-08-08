@@ -384,7 +384,7 @@ __device__ void pbkdf2_statecopy8(pbkdf2_hmac_state *d, pbkdf2_hmac_state *s) {
 __global__ __launch_bounds__(128)
 void cuda_pre_keccak512(uint32_t *g_idata, uint32_t nonce)
 {
-	uint32_t data[20];
+	uint32_t data[20]; // BLOCK DATA, NEED TO MODIFY
 
 	const uint32_t thread = (blockIdx.x * blockDim.x) + threadIdx.x;
 	nonce   += thread;
@@ -392,42 +392,42 @@ void cuda_pre_keccak512(uint32_t *g_idata, uint32_t nonce)
 
 	#pragma unroll
 	for (int i=0; i<19; i++)
-		data[i] = cuda_swab32(c_data[i]);
+		data[i] = cuda_swab32(c_data[i]); // SWAP, NEED TO MODIFY
 	data[19] = cuda_swab32(nonce);
 
-//    scrypt_pbkdf2_1((const uint8_t*)data, 80, (const uint8_t*)data, 80, (uint8_t*)g_idata, 128);
+    scrypt_pbkdf2_1((const uint8_t*)data, 80, (const uint8_t*)data, 80, (uint8_t*)g_idata, 128);
 
-	pbkdf2_hmac_state hmac_pw;
-
-	/* hmac(password, ...) */
-	pbkdf2_hmac_init80(&hmac_pw, data);
-
-	/* hmac(password, salt...) */
-	pbkdf2_hmac_update72(&hmac_pw, data);
-	pbkdf2_hmac_update8(&hmac_pw, data+72/4);
-
-	pbkdf2_hmac_state work;
-	uint32_t ti[16];
-
-	/* U1 = hmac(password, salt || be(i)) */
-	uint32_t be = 0x01000000U;//cuda_swab32(1);
-	pbkdf2_statecopy8(&work, &hmac_pw);
-	pbkdf2_hmac_update4_8(&work, &be);
-	pbkdf2_hmac_finish12(&work, ti);
-	mycpy64(g_idata, ti);
-
-	be = 0x02000000U;//cuda_swab32(2);
-	pbkdf2_statecopy8(&work, &hmac_pw);
-	pbkdf2_hmac_update4_8(&work, &be);
-	pbkdf2_hmac_finish12(&work, ti);
-	mycpy64(g_idata+16, ti);
+//	pbkdf2_hmac_state hmac_pw;
+//
+//	/* hmac(password, ...) */
+//	pbkdf2_hmac_init80(&hmac_pw, data);
+//
+//	/* hmac(password, salt...) */
+//	pbkdf2_hmac_update72(&hmac_pw, data);
+//	pbkdf2_hmac_update8(&hmac_pw, data+72/4);
+//
+//	pbkdf2_hmac_state work;
+//	uint32_t ti[16];
+//
+//	/* U1 = hmac(password, salt || be(i)) */
+//	uint32_t be = 0x01000000U;//cuda_swab32(1);
+//	pbkdf2_statecopy8(&work, &hmac_pw);
+//	pbkdf2_hmac_update4_8(&work, &be);
+//	pbkdf2_hmac_finish12(&work, ti);
+//	mycpy64(g_idata, ti);
+//
+//	be = 0x02000000U;//cuda_swab32(2);
+//	pbkdf2_statecopy8(&work, &hmac_pw);
+//	pbkdf2_hmac_update4_8(&work, &be);
+//	pbkdf2_hmac_finish12(&work, ti);
+//	mycpy64(g_idata+16, ti);
 }
 
 
 __global__ __launch_bounds__(128)
 void cuda_post_keccak512(uint32_t *g_odata, uint32_t *g_hash, uint32_t nonce)
 {
-	uint32_t data[20];
+	uint32_t data[20]; // BLOCK DATA, NEED TO MODIFY
 
 	const uint32_t thread = (blockIdx.x * blockDim.x) + threadIdx.x;
 	g_hash  += thread * 8;
@@ -436,27 +436,27 @@ void cuda_post_keccak512(uint32_t *g_odata, uint32_t *g_hash, uint32_t nonce)
 
 	#pragma unroll
 	for (int i=0; i<19; i++)
-		data[i] = cuda_swab32(c_data[i]);
+		data[i] = cuda_swab32(c_data[i]); // SWAP, NEED TO MODIFY
 	data[19] = cuda_swab32(nonce);
 
-//	scrypt_pbkdf2_1((const uint8_t*)data, 80, (const uint8_t*)g_odata, 128, (uint8_t*)g_hash, 32);
+	scrypt_pbkdf2_1((const uint8_t*)data, 80, (const uint8_t*)g_odata, 128, (uint8_t*)g_hash, 32);
 
-	pbkdf2_hmac_state hmac_pw;
-
-	/* hmac(password, ...) */
-	pbkdf2_hmac_init80(&hmac_pw, data);
-
-	/* hmac(password, salt...) */
-	pbkdf2_hmac_update72(&hmac_pw, g_odata);
-	pbkdf2_hmac_update56(&hmac_pw, g_odata+72/4);
-
-	uint32_t ti[16];
-
-	/* U1 = hmac(password, salt || be(i)) */
-	uint32_t be = 0x01000000U;//cuda_swab32(1);
-	pbkdf2_hmac_update4_56(&hmac_pw, &be);
-	pbkdf2_hmac_finish60(&hmac_pw, ti);
-	mycpy32(g_hash, ti);
+//	pbkdf2_hmac_state hmac_pw;
+//
+//	/* hmac(password, ...) */
+//	pbkdf2_hmac_init80(&hmac_pw, data);
+//
+//	/* hmac(password, salt...) */
+//	pbkdf2_hmac_update72(&hmac_pw, g_odata);
+//	pbkdf2_hmac_update56(&hmac_pw, g_odata+72/4);
+//
+//	uint32_t ti[16];
+//
+//	/* U1 = hmac(password, salt || be(i)) */
+//	uint32_t be = 0x01000000U;//cuda_swab32(1);
+//	pbkdf2_hmac_update4_56(&hmac_pw, &be);
+//	pbkdf2_hmac_finish60(&hmac_pw, ti);
+//	mycpy32(g_hash, ti);
 }
 
 //
