@@ -150,7 +150,7 @@ int device_batchsize[MAX_GPUS] = { 0 };
 int device_texturecache[MAX_GPUS] = { 0 };
 int device_singlememory[MAX_GPUS] = { 0 };
 // implemented scrypt options
-int parallel = 2; // All should be made on GPU
+int parallel = 1; // All should be made on GPU
 char *device_config[MAX_GPUS] = { 0 };
 int device_backoff[MAX_GPUS] = { 0 }; // scrypt
 int device_bfactor[MAX_GPUS] = { 0 }; // cryptonight
