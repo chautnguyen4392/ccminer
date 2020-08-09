@@ -150,7 +150,7 @@ int device_batchsize[MAX_GPUS] = { 0 };
 int device_texturecache[MAX_GPUS] = { 0 };
 int device_singlememory[MAX_GPUS] = { 0 };
 // implemented scrypt options
-int parallel = 2; // All should be made on GPU
+int parallel = 1; // All should be made on GPU
 char *device_config[MAX_GPUS] = { 0 };
 int device_backoff[MAX_GPUS] = { 0 }; // scrypt
 int device_bfactor[MAX_GPUS] = { 0 }; // cryptonight
@@ -1009,6 +1009,20 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			check_dups = true;
 			be32enc(&ntime, work->data[17]);
 			be32enc(&nonce, work->data[19]);
+			break;
+		case ALGO_SCRYPT_JANE:
+			int nVersion = swab32(work->data[0]);
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				le32enc(&ntime, work->data[17]);
+				le32enc(&nonce, work->data[19]);
+			}
+			else
+			{
+				le32enc(&ntime, work->data[18]);
+				le32enc(&nonce, work->data[20]);
+			}
 			break;
 		default:
 			le32enc(&ntime, work->data[17]);
@@ -1938,6 +1952,16 @@ static void *miner_thread(void *userdata)
 		} else if (opt_algo == ALGO_EQUIHASH) {
 			nonceptr = &work.data[EQNONCE_OFFSET]; // 27 is pool extranonce (256bits nonce space)
 			wcmplen = 4+32+32;
+		}
+		else if (opt_algo == ALGO_SCRYPT_JANE)
+		{
+			int nVersion = swab32(work.data[0]);
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				nonceptr = (uint32_t*) (((char*)work.data) + 80);
+				wcmplen = 80;
+			}
 		}
 
 		if (have_stratum) {

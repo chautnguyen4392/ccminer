@@ -239,7 +239,7 @@ static void scrypt_hmac_finish(scrypt_hmac_state *st, scrypt_hash_digest mac)
  * Special version where N = 1
  *  - mikaelh
  */
-static void scrypt_pbkdf2_1(const uint8_t *password, size_t password_len,
+void scrypt_pbkdf2_1(const uint8_t *password, size_t password_len,
 	const uint8_t *salt, size_t salt_len, uint8_t *out, uint64_t bytes)
 {
 	scrypt_hmac_state hmac_pw, hmac_pw_salt, work;
@@ -448,6 +448,12 @@ void free_scrypt_jane(int thr_id)
 
 #define bswap_32x4(x) ((((x) << 24) & 0xff000000u) | (((x) << 8) & 0x00ff0000u) \
 					 | (((x) >> 8) & 0x0000ff00u) | (((x) >> 24) & 0x000000ffu))
+#define bswap_64x16(val) \
+ ( (((val) >> 56) & 0x00000000000000ffu) | (((val) >> 40) & 0x000000000000ff00u) | \
+   (((val) >> 24) & 0x0000000000ff0000u) | (((val) >>  8) & 0x00000000ff000000u) | \
+   (((val) <<  8) & 0x000000ff00000000u) | (((val) << 24) & 0x0000ff0000000000u) | \
+   (((val) << 40) & 0x00ff000000000000u) | (((val) << 56) & 0xff00000000000000u) )
+
 static int s_Nfactor = 0;
 
 int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
@@ -463,7 +469,12 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 		applog(LOG_INFO, "Given scrypt-jane parameters: %s", jane_params);
 
 	// GET NFACTOR BASED ON BLOCK NTIME
-	int Nfactor = GetNfactor(bswap_32x4(pdata[17]));
+	int nVersion = bswap_32x4(pdata[0]);
+	int Nfactor = 19; // Nfactor is fixed after hardfork
+	if (nVersion < 7)
+	{
+		Nfactor = GetNfactor(bswap_32x4(pdata[17]));
+	}
 	if (Nfactor > scrypt_maxN) {
 		scrypt_fatal_error("scrypt: N out of range");
 	}
@@ -505,13 +516,13 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	gettimeofday(tv_start, NULL);
 
-	uint32_t *data[2] = { new uint32_t[20*throughput], new uint32_t[20*throughput] };
+	uint32_t *data[2] = { new uint32_t[21*throughput], new uint32_t[21*throughput] };
 	uint32_t* hash[2]   = { cuda_hashbuffer(thr_id,0), cuda_hashbuffer(thr_id,1) };
 
-	uint32_t n = pdata[19];
+	uint32_t n = pdata[20];
 
-	uint32_t nTime = bswap_32x4(pdata[17]);
-	uint32_t nNonce = bswap_32x4(pdata[19]);
+	uint32_t nTime = bswap_32x4(pdata[18]);
+	uint32_t nNonce = bswap_32x4(pdata[20]);
 
 	char *target_str = get_target_string(ptarget);
 	applog(LOG_ERR,
@@ -521,8 +532,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	/* byte swap pdata into data[0]/[1] arrays */
 	for (int k=0; k<2; ++k) {
-		for(int z=0;z<20;z++) data[k][z] = bswap_32x4(pdata[z]);
-		for(int i=1;i<throughput;++i) memcpy(&data[k][20*i], &data[k][0], 20*sizeof(uint32_t));
+		for(int z=0;z<21;z++) data[k][z] = bswap_32x4(pdata[z]);
+		for(int i=1;i<throughput;++i) memcpy(&data[k][21*i], &data[k][0], 21*sizeof(uint32_t));
 	}
 	if (parallel == 2) prepare_keccak512(thr_id, pdata);
 
@@ -550,11 +561,11 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 			for(int i=0;i<throughput;++i) {
 				uint32_t tmp_nonce = n++;
-				data[nxt][20*i + 19] = bswap_32x4(tmp_nonce);
+				data[nxt][21*i + 20] = bswap_32x4(tmp_nonce);
 			}
 
 			for(int i=0;i<throughput;++i)
-				scrypt_pbkdf2_1((unsigned char *)&data[nxt][20*i], 80, (unsigned char *)&data[nxt][20*i], 80, Xbuf[nxt].ptr + 128 * i, 128);
+				scrypt_pbkdf2_1((unsigned char *)&data[nxt][21*i], 84, (unsigned char *)&data[nxt][21*i], 84, Xbuf[nxt].ptr + 128 * i, 128);
 
 			memcpy(cuda_X[nxt], Xbuf[nxt].ptr, 128 * throughput);
 			cuda_scrypt_serialize(thr_id, nxt);
@@ -571,7 +582,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 			memcpy(Xbuf[cur].ptr, cuda_X[cur], 128 * throughput);
 			for(int i=0;i<throughput;++i)
-				scrypt_pbkdf2_1((unsigned char *)&data[cur][20*i], 80, Xbuf[cur].ptr + 128 * i, 128, (unsigned char *)(&hash[cur][8*i]), 32);
+				scrypt_pbkdf2_1((unsigned char *)&data[cur][21*i], 84, Xbuf[cur].ptr + 128 * i, 128, (unsigned char *)(&hash[cur][8*i]), 32);
 
 #define VERIFY_ALL 0
 #if VERIFY_ALL
@@ -657,16 +668,16 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 		{
 			if (hash[cur][8*i+7] <= Htarg && fulltest(&hash[cur][8*i], ptarget))
 			{
-				uint32_t _ALIGN(64) thash[8], tdata[20];
+				uint32_t _ALIGN(64) thash[8], tdata[21];
 				uint32_t tmp_nonce = nonce[cur] + i;
 
-				for(int z=0;z<19;z++)
+				for(int z=0;z<20;z++)
 					tdata[z] = bswap_32x4(pdata[z]);
-				tdata[19] = bswap_32x4(tmp_nonce);
+				tdata[20] = bswap_32x4(tmp_nonce);
 
-				scrypt_pbkdf2_1((unsigned char *)tdata, 80, (unsigned char *)tdata, 80, Xbuf[cur].ptr + 128 * i, 128);
+				scrypt_pbkdf2_1((unsigned char *)tdata, 84, (unsigned char *)tdata, 84, Xbuf[cur].ptr + 128 * i, 128);
 				scrypt_ROMix_1((scrypt_mix_word_t *)(Xbuf[cur].ptr + 128 * i), (scrypt_mix_word_t *)(Ybuf.ptr), (scrypt_mix_word_t *)(Vbuf.ptr), N);
-				scrypt_pbkdf2_1((unsigned char *)tdata, 80, Xbuf[cur].ptr + 128 * i, 128, (unsigned char *)thash, 32);
+				scrypt_pbkdf2_1((unsigned char *)tdata, 84, Xbuf[cur].ptr + 128 * i, 128, (unsigned char *)thash, 32);
 
 				char *hash_cpu_str = get_target_string(thash);
 				char *hash_gpu_str = get_target_string(&hash[cur][8*i]);
@@ -680,8 +691,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 							"TACA ===> scanhash_scrypt_jane[%d], Found a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
 					work_set_target_ratio(work, thash);
-					*hashes_done = n - pdata[19];
-					pdata[19] = tmp_nonce;
+					*hashes_done = n - pdata[20];
+					pdata[20] = tmp_nonce;
 					scrypt_free(&Vbuf);
 					scrypt_free(&Ybuf);
 					scrypt_free(&Xbuf[0]); scrypt_free(&Xbuf[1]);
@@ -706,8 +717,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	scrypt_free(&Xbuf[0]); scrypt_free(&Xbuf[1]);
 	delete[] data[0]; delete[] data[1];
 
-	*hashes_done = n - pdata[19];
-	pdata[19] = n;
+	*hashes_done = n - pdata[20];
+	pdata[20] = n;
 	gettimeofday(tv_end, NULL);
 	return 0;
 }
