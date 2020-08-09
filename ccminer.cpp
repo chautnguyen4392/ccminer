@@ -971,6 +971,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		uint32_t ntime, nonce = work->nonces[idnonce];
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
+		int nVersion;
 
 		switch (opt_algo) {
 		case ALGO_BLAKE:
@@ -1011,7 +1012,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			be32enc(&nonce, work->data[19]);
 			break;
 		case ALGO_SCRYPT_JANE:
-			int nVersion = swab32(work->data[0]);
+			nVersion = swab32(work->data[0]);
 			if (nVersion >= 7)
 			{
 				// modify nNonce position, change to adapt with 64-bit nTime
