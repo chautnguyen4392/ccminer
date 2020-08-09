@@ -14,6 +14,7 @@
 
 #include "keccak.h"
 #include "salsa_kernel.h"
+#include "scrypt-jane.h"
 
 // define some error checking macros
 #define DELIMITER '/'

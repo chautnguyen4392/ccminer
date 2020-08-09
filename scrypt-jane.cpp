@@ -239,7 +239,7 @@ static void scrypt_hmac_finish(scrypt_hmac_state *st, scrypt_hash_digest mac)
  * Special version where N = 1
  *  - mikaelh
  */
-static void scrypt_pbkdf2_1(const uint8_t *password, size_t password_len,
+void scrypt_pbkdf2_1(const uint8_t *password, size_t password_len,
 	const uint8_t *salt, size_t salt_len, uint8_t *out, uint64_t bytes)
 {
 	scrypt_hmac_state hmac_pw, hmac_pw_salt, work;
