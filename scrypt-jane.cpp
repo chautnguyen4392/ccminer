@@ -191,7 +191,7 @@ static void scrypt_hash(scrypt_hash_digest hash, const uint8_t *m, size_t mlen)
 /* hmac */
 static void scrypt_hmac_init(scrypt_hmac_state *st, const uint8_t *key, size_t keylen)
 {
-	uint8_t pad[SCRYPT_HASH_BLOCK_SIZE] = {0};
+	uint8_t pad[SCRYPT_HASH_BLOCK_SIZE] = {0}; // SCRYPT_HASH_BLOCK_SIZE = 72
 	size_t i;
 
 	scrypt_hash_init(&st->inner);
@@ -634,14 +634,14 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			}
 
 			cuda_scrypt_serialize(thr_id, nxt);
-			pre_keccak512(thr_id, nxt, nonce[nxt], throughput);
+			pre_keccak512(thr_id, nxt, nonce[nxt], throughput, 84);
 			cuda_scrypt_core(thr_id, nxt, N);
 			//cuda_scrypt_flush(thr_id, nxt);
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
 				break;
 			}
 
-			post_keccak512(thr_id, nxt, nonce[nxt], throughput);
+			post_keccak512(thr_id, nxt, nonce[nxt], throughput, 84);
 			cuda_scrypt_done(thr_id, nxt);
 
 			cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
