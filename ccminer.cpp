@@ -665,6 +665,7 @@ bool jobj_binary(const json_t *obj, const char *key, void *buf, size_t buflen)
 		applog(LOG_ERR, "JSON key '%s' is not a string", key);
 		return false;
 	}
+	applog(LOG_ERR, "TACA ===> JSON key '%s', data = %s", key, hexstr);
 	if (!hex2bin((uchar*)buf, hexstr, buflen))
 		return false;
 
@@ -1122,6 +1123,45 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			applog(LOG_ERR, "submit_upstream_work OOM");
 			return false;
 		}
+
+
+		/* BEGIN print received data */
+		#pragma pack(push, 1)
+		struct block_header
+		{
+			unsigned int version;
+			uint32_t prev_block[8];
+			uint32_t merkle_root[8];
+			::int64_t timestamp;
+			unsigned int bits;
+			unsigned int nonce;
+
+		};
+		#pragma pack(pop)
+
+		struct block_header pTempData;
+		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+	    // Byte reverse
+	    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+	        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
+
+	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+	    printf("TACA ===> submit_upstream_work, submit block header data,\n"
+	           "pTempData->nVersion = %d,\n"
+	           "pTempData->hashPrevBlock = %s,\n"
+	           "pTempData->hashMerkleRoot = %s,\n"
+	           "pTempData->nTime = %lld,\n"
+	           "pTempData->nBits = %u,\n"
+	           "pTempData->nNonce = %u\n",
+	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+	    free(hashPrevBlock_str);
+	    free(hashMerkleRoot_str);
+
+	    /* END print received data */
+
 
 		/* build JSON-RPC request */
 		sprintf(s,
