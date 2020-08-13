@@ -669,6 +669,43 @@ bool jobj_binary(const json_t *obj, const char *key, void *buf, size_t buflen)
 	if (!hex2bin((uchar*)buf, hexstr, buflen))
 		return false;
 
+	/* BEGIN print received data */
+	#pragma pack(push, 1)
+	struct block_header
+	{
+		unsigned int version;
+		uint32_t prev_block[8];
+		uint32_t merkle_root[8];
+		::int64_t timestamp;
+		unsigned int bits;
+		unsigned int nonce;
+
+	};
+	#pragma pack(pop)
+
+	struct block_header pTempData;
+	memcpy((void*)&pTempData, (const void*)buf, sizeof(pTempData));
+    // Byte reverse
+    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
+
+    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+    printf("TACA ===> jobj_binary, received block header data,\n"
+           "pTempData->nVersion = %d,\n"
+           "pTempData->hashPrevBlock = %s,\n"
+           "pTempData->hashMerkleRoot = %s,\n"
+           "pTempData->nTime = %lld,\n"
+           "pTempData->nBits = %u,\n"
+           "pTempData->nNonce = %u\n",
+           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+    free(hashPrevBlock_str);
+    free(hashMerkleRoot_str);
+
+    /* END print received data */
+
 	return true;
 }
 
@@ -1980,8 +2017,45 @@ static void *miner_thread(void *userdata)
 			wcmplen = 32;
 		}
 
+		/* BEGIN print received data */
+		#pragma pack(push, 1)
+		struct block_header
+		{
+			unsigned int version;
+			uint32_t prev_block[8];
+			uint32_t merkle_root[8];
+			::int64_t timestamp;
+			unsigned int bits;
+			unsigned int nonce;
+
+		};
+		#pragma pack(pop)
+
+		struct block_header pTempData;
+		memcpy((void*)&pTempData, (const void*)work.data, sizeof(pTempData));
+	    // Byte reverse
+	    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+	        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
+
+	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+	    printf("TACA ===> miner_thread[%d], received block header data,\n"
+	           "pTempData->nVersion = %d,\n"
+	           "pTempData->hashPrevBlock = %s,\n"
+	           "pTempData->hashMerkleRoot = %s,\n"
+	           "pTempData->nTime = %lld,\n"
+	           "pTempData->nBits = %u,\n"
+	           "pTempData->nNonce = %u\n",
+	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+	    free(hashPrevBlock_str);
+	    free(hashMerkleRoot_str);
+
+	    /* END print received data */
+
 		uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + wcmplen);
-		applog(LOG_ERR, "TACA ===> miner_thread[%d], nonceptr = %u, opt_algo = %d, have_stratum = %d", thr_id, *nonceptr, opt_algo, have_stratum);
+		applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo = %d, have_stratum = %d", thr_id, *nonceptr, opt_algo, have_stratum);
 
 		if (opt_algo == ALGO_WILDKECCAK) {
 			nonceptr = (uint32_t*) (((char*)work.data) + 1);
@@ -1996,12 +2070,14 @@ static void *miner_thread(void *userdata)
 		}
 		else if (opt_algo == ALGO_SCRYPT_JANE)
 		{
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo == ALGO_SCRYPT_JANE");
+			// modify nNonce position, change to adapt with 64-bit nTime
+			nonceptr = (uint32_t*) (((char*)work.data) + 80);
+			wcmplen = 80;
 			int nVersion = swab32(work.data[0]);
 			if (nVersion >= 7)
 			{
-				// modify nNonce position, change to adapt with 64-bit nTime
-				nonceptr = (uint32_t*) (((char*)work.data) + 80);
-				wcmplen = 80;
+				applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo == ALGO_SCRYPT_JANE, nVersion >= 7, nonceptr = %u", *nonceptr);
 			}
 		}
 
@@ -2121,11 +2197,15 @@ static void *miner_thread(void *userdata)
 				}
 			}
 			#endif
-			applog(LOG_ERR, "TACA ===> miner_thread[%d], copy g_work to work", thr_id);
+
 			memcpy(&work, &g_work, sizeof(struct work));
 			nonceptr[0] = (UINT32_MAX / opt_n_threads) * thr_id; // 0 if single thr
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], copy g_work to work, nonceptr[0] = %u", thr_id, nonceptr[0]);
 		} else
+		{
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], nonceptr[0] = %u", thr_id, nonceptr[0]);
 			nonceptr[0]++; //??
+		}
 
 		if (opt_algo == ALGO_DECRED) {
 			// suprnova job_id check without data/target/height change...
