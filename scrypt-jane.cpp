@@ -482,7 +482,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	struct block_header pTempData;
 	memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
     // Byte reverse
-    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
   //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
         ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
 

@@ -686,7 +686,7 @@ bool jobj_binary(const json_t *obj, const char *key, void *buf, size_t buflen)
 	struct block_header pTempData;
 	memcpy((void*)&pTempData, (const void*)buf, sizeof(pTempData));
     // Byte reverse
-    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
   //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
         ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
 
@@ -1179,7 +1179,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		struct block_header pTempData;
 		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
 	    // Byte reverse
-	    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
 	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
 	        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
 
@@ -2034,7 +2034,7 @@ static void *miner_thread(void *userdata)
 		struct block_header pTempData;
 		memcpy((void*)&pTempData, (const void*)work.data, sizeof(pTempData));
 	    // Byte reverse
-	    for (unsigned int i = 0; i < 128/sizeof( uint32_t ); ++i)
+	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
 	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
 	        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
 
