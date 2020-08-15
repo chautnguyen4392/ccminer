@@ -727,6 +727,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					applog(LOG_ERR,
 							"TACA ===> scanhash_scrypt_jane[%d], Found a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
+					free(hash_cpu_str);
+					free(hash_gpu_str);
 					work_set_target_ratio(work, thash);
 					*hashes_done = n - pdata[20];
 					pdata[20] = tmp_nonce;
@@ -737,6 +739,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					gettimeofday(tv_end, NULL);
 					return 1;
 				} else {
+					free(hash_cpu_str);
+					free(hash_gpu_str);
 					applog(LOG_ERR,
 							"TACA ===> scanhash_scrypt_jane[%d], result does not validate on CPU", thr_id);
 					gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d, s=%d)", i, cur);
