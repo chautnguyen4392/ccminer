@@ -454,6 +454,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end)
 {
 	uint32_t *pdata = work->data;
+	// GET HASH TARGET
 	uint32_t *ptarget = work->target;
 	const uint32_t Htarg = ptarget[7];
 	uint32_t N;
@@ -461,6 +462,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	if (s_Nfactor == 0 && strlen(jane_params) > 0)
 		applog(LOG_INFO, "Given scrypt-jane parameters: %s", jane_params);
 
+	// GET NFACTOR BASED ON BLOCK NTIME
 	int Nfactor = GetNfactor(bswap_32x4(pdata[17]));
 	if (Nfactor > scrypt_maxN) {
 		scrypt_fatal_error("scrypt: N out of range");
@@ -480,6 +482,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 		}
 		s_Nfactor = Nfactor;
 	}
+
+
 
 	static __thread int throughput = 0;
 	if(!init[thr_id]) {
@@ -506,6 +510,15 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	uint32_t n = pdata[19];
 
+	uint32_t nTime = bswap_32x4(pdata[17]);
+	uint32_t nNonce = bswap_32x4(pdata[19]);
+
+	char *target_str = get_target_string(ptarget);
+	applog(LOG_ERR,
+			"TACA ===> scanhash_scrypt_jane[%d], block nTime = %lld, Nfactor = %d, target = %s, Htarg = %x, throughput = %d",
+			thr_id, nTime, Nfactor, target_str, Htarg, throughput);
+	free(target_str);
+
 	/* byte swap pdata into data[0]/[1] arrays */
 	for (int k=0; k<2; ++k) {
 		for(int z=0;z<20;z++) data[k][z] = bswap_32x4(pdata[z]);
@@ -526,6 +539,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	int cur = 0, nxt = 1;
 	int iteration = 0;
+	applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], parallel = %d, nNonce = %u", thr_id, parallel, nNonce);
 
 	do {
 		nonce[nxt] = n;
@@ -594,6 +608,20 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			if (opt_debug && (iteration % 64 == 0))
 				applog(LOG_DEBUG, "GPU #%d: n=%x", device_map[thr_id], n);
 
+			for (int i=0; iteration > 0 && i<throughput; i++)
+			{
+				char *target_str = get_target_string(ptarget);
+				char *hash_cur_str = get_target_string(&hash[cur][8*i]);
+				char *hash_nxt_str = get_target_string(&hash[nxt][8*i]);
+
+				applog(LOG_ERR,
+						"TACA ===> scanhash_scrypt_jane[%d], BEFORE scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+						thr_id, i, hash_cur_str, hash_nxt_str, Htarg, nonce[cur], nonce[nxt]);
+				free(target_str);
+				free(hash_cur_str);
+				free(hash_nxt_str);
+			}
+
 			cuda_scrypt_serialize(thr_id, nxt);
 			pre_keccak512(thr_id, nxt, nonce[nxt], throughput);
 			cuda_scrypt_core(thr_id, nxt, N);
@@ -606,6 +634,19 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			cuda_scrypt_done(thr_id, nxt);
 
 			cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
+			for (int i=0; iteration > 0 && i<throughput; i++)
+			{
+				char *target_str = get_target_string(ptarget);
+				char *hash_cur_str = get_target_string(&hash[cur][8*i]);
+				char *hash_nxt_str = get_target_string(&hash[nxt][8*i]);
+
+				applog(LOG_ERR,
+						"TACA ===> scanhash_scrypt_jane[%d], AFTER scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+						thr_id, i, hash_cur_str, hash_nxt_str, Htarg, nonce[cur], nonce[nxt]);
+				free(target_str);
+				free(hash_cur_str);
+				free(hash_nxt_str);
+			}
 			//cuda_scrypt_flush(thr_id, nxt); // made by cuda_scrypt_sync
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
 				break;
@@ -627,8 +668,17 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 				scrypt_ROMix_1((scrypt_mix_word_t *)(Xbuf[cur].ptr + 128 * i), (scrypt_mix_word_t *)(Ybuf.ptr), (scrypt_mix_word_t *)(Vbuf.ptr), N);
 				scrypt_pbkdf2_1((unsigned char *)tdata, 80, Xbuf[cur].ptr + 128 * i, 128, (unsigned char *)thash, 32);
 
+				char *hash_cpu_str = get_target_string(thash);
+				char *hash_gpu_str = get_target_string(&hash[cur][8*i]);
+				applog(LOG_ERR,
+						"TACA ===> scanhash_scrypt_jane[%d], Found a possible solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
+						thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
+
 				if (memcmp(thash, &hash[cur][8*i], 32) == 0)
 				{
+					applog(LOG_ERR,
+							"TACA ===> scanhash_scrypt_jane[%d], Found a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
+							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
 					work_set_target_ratio(work, thash);
 					*hashes_done = n - pdata[19];
 					pdata[19] = tmp_nonce;
@@ -639,6 +689,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					gettimeofday(tv_end, NULL);
 					return 1;
 				} else {
+					applog(LOG_ERR,
+							"TACA ===> scanhash_scrypt_jane[%d], result does not validate on CPU", thr_id);
 					gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d, s=%d)", i, cur);
 				}
 			}

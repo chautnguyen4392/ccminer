@@ -784,6 +784,19 @@ int timeval_subtract(struct timeval *result, struct timeval *x,
 	return x->tv_sec < y->tv_sec;
 }
 
+char* get_target_string(const uint32_t *hash)
+{
+	uint32_t hash_be[8];
+	char *hash_str;
+
+	for (int i = 0; i < 8; i++) {
+		be32enc(hash_be + i, hash[7 - i]);
+	}
+	hash_str = bin2hex((uchar *)hash_be, 32);
+
+	return hash_str;
+}
+
 bool fulltest(const uint32_t *hash, const uint32_t *target)
 {
 	int i;
