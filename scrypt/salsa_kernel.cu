@@ -156,15 +156,15 @@ int cuda_throughput(int thr_id)
 			return 0;
 
 		unsigned int THREADS_PER_WU = kernel->threads_per_wu();
-		unsigned int mem_size = WU_PER_LAUNCH * sizeof(uint32_t) * 32;
+		unsigned int mem_size = WU_PER_LAUNCH * sizeof(uint32_t) * 32; // BLOCK DATA RECEIVED FROM YACOIND IS 128 BYTES
 		unsigned int state_size = WU_PER_LAUNCH * sizeof(uint32_t) * 8;
 
 		// allocate device memory for scrypt_core inputs and outputs
 		uint32_t *tmp;
-		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_idata[0][thr_id] = tmp;
-		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_idata[1][thr_id] = tmp;
-		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_odata[0][thr_id] = tmp;
-		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_odata[1][thr_id] = tmp;
+		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_idata[0][thr_id] = tmp; // INPUT DATA 1
+		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_idata[1][thr_id] = tmp; // INPUT DATA 2
+		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_odata[0][thr_id] = tmp; // OUTPUT DATA 1
+		checkCudaErrors(cudaMalloc((void **) &tmp, mem_size)); context_odata[1][thr_id] = tmp; // OUTPUT DATA 2
 
 		// allocate pinned host memory for scrypt hashes
 		checkCudaErrors(cudaHostAlloc((void **) &tmp, state_size, cudaHostAllocDefault)); context_H[0][thr_id] = tmp;
