@@ -191,7 +191,7 @@ static void scrypt_hash(scrypt_hash_digest hash, const uint8_t *m, size_t mlen)
 /* hmac */
 static void scrypt_hmac_init(scrypt_hmac_state *st, const uint8_t *key, size_t keylen)
 {
-	uint8_t pad[SCRYPT_HASH_BLOCK_SIZE] = {0};
+	uint8_t pad[SCRYPT_HASH_BLOCK_SIZE] = {0}; // SCRYPT_HASH_BLOCK_SIZE = 72
 	size_t i;
 
 	scrypt_hash_init(&st->inner);
