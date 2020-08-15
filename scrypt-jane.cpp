@@ -465,12 +465,49 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	const uint32_t Htarg = ptarget[7];
 	uint32_t N;
 
+	/* BEGIN print received data */
+	#pragma pack(push, 1)
+	struct block_header
+	{
+		unsigned int version;
+		uint32_t prev_block[8];
+		uint32_t merkle_root[8];
+		::int64_t timestamp;
+		unsigned int bits;
+		unsigned int nonce;
+
+	};
+	#pragma pack(pop)
+
+	struct block_header pTempData;
+	memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+    // Byte reverse
+    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+        ((uint32_t *)pTempData)[i] = bswap_32x4(((uint32_t *)pTempData)[i]);
+
+    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+    printf("TACA ===> scanhash_scrypt_jane, received block header data,\n"
+           "pTempData->nVersion = %d,\n"
+           "pTempData->hashPrevBlock = %s,\n"
+           "pTempData->hashMerkleRoot = %s,\n"
+           "pTempData->nTime = %lld,\n"
+           "pTempData->nBits = %u,\n"
+           "pTempData->nNonce = %u\n",
+           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+    free(hashPrevBlock_str);
+    free(hashMerkleRoot_str);
+
+    /* END print received data */
+
 	if (s_Nfactor == 0 && strlen(jane_params) > 0)
 		applog(LOG_INFO, "Given scrypt-jane parameters: %s", jane_params);
 
 	// GET NFACTOR BASED ON BLOCK NTIME
 	int nVersion = bswap_32x4(pdata[0]);
-	int Nfactor = 19; // Nfactor is fixed after hardfork
+	int Nfactor = 21; // Nfactor is fixed after hardfork
 	if (nVersion < 7)
 	{
 		Nfactor = GetNfactor(bswap_32x4(pdata[17]));
@@ -690,6 +727,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					applog(LOG_ERR,
 							"TACA ===> scanhash_scrypt_jane[%d], Found a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
+					free(hash_cpu_str);
+					free(hash_gpu_str);
 					work_set_target_ratio(work, thash);
 					*hashes_done = n - pdata[20];
 					pdata[20] = tmp_nonce;
@@ -700,6 +739,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					gettimeofday(tv_end, NULL);
 					return 1;
 				} else {
+					free(hash_cpu_str);
+					free(hash_gpu_str);
 					applog(LOG_ERR,
 							"TACA ===> scanhash_scrypt_jane[%d], result does not validate on CPU", thr_id);
 					gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d, s=%d)", i, cur);
