@@ -1926,6 +1926,7 @@ static void *miner_thread(void *userdata)
 		}
 
 		uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + wcmplen);
+		applog(LOG_ERR, "TACA ===> miner_thread[%d], nonceptr = %u, opt_algo = %d, have_stratum = %d", thr_id, *nonceptr, opt_algo, have_stratum);
 
 		if (opt_algo == ALGO_WILDKECCAK) {
 			nonceptr = (uint32_t*) (((char*)work.data) + 1);
@@ -1990,6 +1991,10 @@ static void *miner_thread(void *userdata)
 						goto out;
 					}
 				}
+				else
+				{
+					applog(LOG_ERR, "TACA ===> miner_thread[%d], getwork successfully", thr_id);
+				}
 				g_work_time = time(NULL);
 			}
 		}
@@ -2000,6 +2005,7 @@ static void *miner_thread(void *userdata)
 
 		if (!opt_benchmark && (g_work.height != work.height || memcmp(work.target, g_work.target, sizeof(work.target))))
 		{
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], job %s target change", thr_id, g_work.job_id);
 			if (opt_debug) {
 				uint64_t target64 = g_work.target[7] * 0x100000000ULL + g_work.target[6];
 				applog(LOG_DEBUG, "job %s target change: %llx (%.1f)", g_work.job_id, target64, g_work.targetdiff);
@@ -2050,6 +2056,7 @@ static void *miner_thread(void *userdata)
 				}
 			}
 			#endif
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], copy g_work to work", thr_id);
 			memcpy(&work, &g_work, sizeof(struct work));
 			nonceptr[0] = (UINT32_MAX / opt_n_threads) * thr_id; // 0 if single thr
 		} else
@@ -2347,6 +2354,9 @@ static void *miner_thread(void *userdata)
 
 		work.scanned_from = start_nonce;
 
+		applog(LOG_ERR,
+				"TACA ===> miner_thread[%d], start=%08x end=%08x range=%08x",
+				thr_id, start_nonce, max_nonce, (max_nonce - start_nonce));
 		gpulog(LOG_DEBUG, thr_id, "start=%08x end=%08x range=%08x",
 			start_nonce, max_nonce, (max_nonce-start_nonce));
 
@@ -2732,6 +2742,7 @@ static void *miner_thread(void *userdata)
 
 			work.submit_nonce_id = 0;
 			nonceptr[0] = work.nonces[0];
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], submit_work with work.nonces[0] = %u", thr_id, work.nonces[0]);
 			if (!submit_work(mythr, &work))
 				break;
 			nonceptr[0] = curnonce;
