@@ -1009,6 +1009,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		uint32_t ntime, nonce = work->nonces[idnonce];
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
+		int nVersion;
 
 		switch (opt_algo) {
 		case ALGO_BLAKE:
@@ -1049,7 +1050,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			be32enc(&nonce, work->data[19]);
 			break;
 		case ALGO_SCRYPT_JANE:
-			int nVersion = swab32(work->data[0]);
+			nVersion = swab32(work->data[0]);
 			if (nVersion >= 7)
 			{
 				// modify nNonce position, change to adapt with 64-bit nTime
@@ -1180,7 +1181,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 	    // Byte reverse
 	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
 	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
-	        ((uint32_t *)pTempData)[i] = swab32(((uint32_t *)pTempData)[i]);
+	        ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
 
 	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
 	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
@@ -2017,6 +2018,7 @@ static void *miner_thread(void *userdata)
 		}
 
 		uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + wcmplen);
+		int nVersion = swab32(work.data[0]);
 		applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo = %d, have_stratum = %d", thr_id, opt_algo, have_stratum);
 
 		if (opt_algo == ALGO_WILDKECCAK) {
@@ -2032,13 +2034,12 @@ static void *miner_thread(void *userdata)
 		}
 		else if (opt_algo == ALGO_SCRYPT_JANE)
 		{
-			applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo == ALGO_SCRYPT_JANE", thr_id);
-			// modify nNonce position, change to adapt with 64-bit nTime
-			nonceptr = (uint32_t*) (((char*)work.data) + 80);
-			wcmplen = 80;
-			int nVersion = swab32(work.data[0]);
+			applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo == ALGO_SCRYPT_JANE, nVersion = %d", thr_id, nVersion);
 			if (nVersion >= 7)
 			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				nonceptr = (uint32_t*) (((char*)work.data) + 80);
+				wcmplen = 80;
 				applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_algo == ALGO_SCRYPT_JANE, nVersion >= 7, nonceptr = %u", thr_id,*nonceptr);
 			}
 		}
@@ -2096,7 +2097,15 @@ static void *miner_thread(void *userdata)
 				}
 				else
 				{
-					applog(LOG_ERR, "TACA ===> miner_thread[%d], getwork successfully", thr_id);
+					nVersion = swab32(g_work.data[0]);
+					applog(LOG_ERR, "TACA ===> miner_thread[%d], getwork successfully, nVersion = %d", thr_id, nVersion);
+					if (nVersion >= 7)
+					{
+						// modify nNonce position, change to adapt with 64-bit nTime
+						nonceptr = (uint32_t*) (((char*)work.data) + 80);
+						wcmplen = 80;
+						applog(LOG_ERR, "TACA ===> miner_thread[%d], getwork successfully, nVersion >= 7, nonceptr = %u", thr_id, *nonceptr);
+					}
 				}
 				g_work_time = time(NULL);
 			}
@@ -2627,7 +2636,7 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SCRYPT_JANE:
 			rc = scanhash_scrypt_jane(thr_id, &work, max_nonce, &hashes_done,
-				NULL, &tv_start, &tv_end);
+				NULL, &tv_start, &tv_end, nVersion);
 			break;
 #endif
 		case ALGO_SKEIN:
