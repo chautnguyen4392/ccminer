@@ -2134,6 +2134,20 @@ static void *miner_thread(void *userdata)
 			wcmplen -= 4;
 		}
 
+		static int hardFork = false;
+		if (!hardFork && opt_algo == ALGO_SCRYPT_JANE)
+		{
+			nVersion = swab32(g_work.data[0]);
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				nonceptr = (uint32_t*) (((char*)work.data) + 80);
+				wcmplen = 80;
+				hardFork = true;
+				applog(LOG_ERR, "TACA ===> miner_thread[%d], hardfork happens, nVersion >= 7, nonceptr = %u", thr_id, *nonceptr);
+			}
+		}
+
 		if (opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTOLIGHT) {
 			uint32_t oldpos = nonceptr[0];
 			bool nicehash = strstr(pools[cur_pooln].url, "nicehash") != NULL;

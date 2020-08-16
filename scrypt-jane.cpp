@@ -465,40 +465,83 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	const uint32_t Htarg = ptarget[7];
 	uint32_t N;
 
-	/* BEGIN print received data */
-	#pragma pack(push, 1)
-	struct block_header
+	if (block_version < 7)
 	{
-		unsigned int version;
-		uint32_t prev_block[8];
-		uint32_t merkle_root[8];
-		::int64_t timestamp;
-		unsigned int bits;
-		unsigned int nonce;
+		/* BEGIN print received data */
+		#pragma pack(push, 1)
+		struct block_header
+		{
+			unsigned int version;
+			uint32_t prev_block[8];
+			uint32_t merkle_root[8];
+			uint32_t timestamp;
+			unsigned int bits;
+			unsigned int nonce;
 
-	};
-	#pragma pack(pop)
+		};
+		#pragma pack(pop)
 
-	struct block_header pTempData;
-	memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
-    // Byte reverse
-    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
-  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
-        ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
+		struct block_header pTempData;
+		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+	    // Byte reverse
+	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+	        ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
 
-    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
-    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
-    printf("TACA ===> scanhash_scrypt_jane, received block header data,\n"
-           "pTempData->nVersion = %d,\n"
-           "pTempData->hashPrevBlock = %s,\n"
-           "pTempData->hashMerkleRoot = %s,\n"
-           "pTempData->nTime = %lld,\n"
-           "pTempData->nBits = %u,\n"
-           "pTempData->nNonce = %u\n",
-           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
-           pTempData.timestamp, pTempData.bits, pTempData.nonce);
-    free(hashPrevBlock_str);
-    free(hashMerkleRoot_str);
+	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+	    printf("TACA ===> scanhash_scrypt_jane[%d], received block header data,\n"
+	           "pTempData->nVersion = %d,\n"
+	           "pTempData->hashPrevBlock = %s,\n"
+	           "pTempData->hashMerkleRoot = %s,\n"
+	           "pTempData->nTime = %lld,\n"
+	           "pTempData->nBits = %u,\n"
+	           "pTempData->nNonce = %u\n",
+			   thr_id,
+	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+	    free(hashPrevBlock_str);
+	    free(hashMerkleRoot_str);
+	}
+	else
+	{
+		/* BEGIN print received data */
+		#pragma pack(push, 1)
+		struct block_header
+		{
+			unsigned int version;
+			uint32_t prev_block[8];
+			uint32_t merkle_root[8];
+			::int64_t timestamp;
+			unsigned int bits;
+			unsigned int nonce;
+
+		};
+		#pragma pack(pop)
+
+		struct block_header pTempData;
+		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+	    // Byte reverse
+	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+	        ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
+
+	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+	    printf("TACA ===> scanhash_scrypt_jane[%d], received block header data,\n"
+	           "pTempData->nVersion = %d,\n"
+	           "pTempData->hashPrevBlock = %s,\n"
+	           "pTempData->hashMerkleRoot = %s,\n"
+	           "pTempData->nTime = %lld,\n"
+	           "pTempData->nBits = %u,\n"
+	           "pTempData->nNonce = %u\n",
+			   thr_id,
+	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
+	    free(hashPrevBlock_str);
+	    free(hashMerkleRoot_str);
+	}
+
 
     /* END print received data */
 

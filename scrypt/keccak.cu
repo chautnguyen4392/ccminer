@@ -544,7 +544,7 @@ void cuda_post_keccak512(uint32_t *g_odata, uint32_t *g_hash, uint32_t nonce, ui
 // callable host code to initialize constants and to call kernels
 //
 
-extern "C" void prepare_keccak512(int thr_id, const uint32_t host_pdata[21], uint32_t keylen)
+extern "C" void prepare_keccak512(int thr_id, const uint32_t* host_pdata, uint32_t keylen)
 {
 	static bool init[MAX_GPUS] = { 0 };
 
