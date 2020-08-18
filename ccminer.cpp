@@ -2134,7 +2134,7 @@ static void *miner_thread(void *userdata)
 			wcmplen -= 4;
 		}
 
-		static int hardFork = false;
+		static __thread int hardFork = false;
 		if (!hardFork && opt_algo == ALGO_SCRYPT_JANE)
 		{
 			nVersion = swab32(g_work.data[0]);
