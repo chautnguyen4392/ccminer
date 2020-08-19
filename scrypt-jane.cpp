@@ -465,84 +465,85 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	const uint32_t Htarg = ptarget[7];
 	uint32_t N;
 
-	if (block_version < 7)
-	{
-		/* BEGIN print received data */
-		#pragma pack(push, 1)
-		struct block_header
+	/* BEGIN print received data */
+    if (opt_debug)
+    {
+		if (block_version < 7)
 		{
-			unsigned int version;
-			uint32_t prev_block[8];
-			uint32_t merkle_root[8];
-			uint32_t timestamp;
-			unsigned int bits;
-			unsigned int nonce;
+			#pragma pack(push, 1)
+			struct block_header
+			{
+				unsigned int version;
+				uint32_t prev_block[8];
+				uint32_t merkle_root[8];
+				uint32_t timestamp;
+				unsigned int bits;
+				unsigned int nonce;
 
-		};
-		#pragma pack(pop)
+			};
+			#pragma pack(pop)
 
-		struct block_header pTempData;
-		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
-	    // Byte reverse
-	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
-	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
-	        ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
+			struct block_header pTempData;
+			memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+			// Byte reverse
+			for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+		  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+				((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
 
-	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
-	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
-	    printf("TACA ===> scanhash_scrypt_jane[%d], received block header data,\n"
-	           "pTempData->nVersion = %d,\n"
-	           "pTempData->hashPrevBlock = %s,\n"
-	           "pTempData->hashMerkleRoot = %s,\n"
-	           "pTempData->nTime = %lld,\n"
-	           "pTempData->nBits = %u,\n"
-	           "pTempData->nNonce = %u\n",
-			   thr_id,
-	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
-	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
-	    free(hashPrevBlock_str);
-	    free(hashMerkleRoot_str);
-	}
-	else
-	{
-		/* BEGIN print received data */
-		#pragma pack(push, 1)
-		struct block_header
+			char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+			char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+			applog(LOG_DEBUG,
+					"TACA => scanhash_scrypt_jane[%d], received block header data,\n"
+							"pTempData->nVersion = %d,\n"
+							"pTempData->hashPrevBlock = %s,\n"
+							"pTempData->hashMerkleRoot = %s,\n"
+							"pTempData->nTime = %lld,\n"
+							"pTempData->nBits = %u,\n"
+							"pTempData->nNonce = %u\n", thr_id,
+					pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+					pTempData.timestamp, pTempData.bits, pTempData.nonce);
+			free(hashPrevBlock_str);
+			free(hashMerkleRoot_str);
+		}
+		else
 		{
-			unsigned int version;
-			uint32_t prev_block[8];
-			uint32_t merkle_root[8];
-			::int64_t timestamp;
-			unsigned int bits;
-			unsigned int nonce;
+			/* BEGIN print received data */
+			#pragma pack(push, 1)
+			struct block_header
+			{
+				unsigned int version;
+				uint32_t prev_block[8];
+				uint32_t merkle_root[8];
+				::int64_t timestamp;
+				unsigned int bits;
+				unsigned int nonce;
 
-		};
-		#pragma pack(pop)
+			};
+			#pragma pack(pop)
 
-		struct block_header pTempData;
-		memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
-	    // Byte reverse
-	    for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
-	  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
-	        ((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
+			struct block_header pTempData;
+			memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+			// Byte reverse
+			for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+		  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+				((uint32_t *)&pTempData)[i] = bswap_32x4(((uint32_t *)&pTempData)[i]);
 
-	    char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
-	    char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
-	    printf("TACA ===> scanhash_scrypt_jane[%d], received block header data,\n"
-	           "pTempData->nVersion = %d,\n"
-	           "pTempData->hashPrevBlock = %s,\n"
-	           "pTempData->hashMerkleRoot = %s,\n"
-	           "pTempData->nTime = %lld,\n"
-	           "pTempData->nBits = %u,\n"
-	           "pTempData->nNonce = %u\n",
-			   thr_id,
-	           pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
-	           pTempData.timestamp, pTempData.bits, pTempData.nonce);
-	    free(hashPrevBlock_str);
-	    free(hashMerkleRoot_str);
-	}
-
-
+			char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+			char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+			applog(LOG_DEBUG,
+					"TACA => scanhash_scrypt_jane[%d], received block header data,\n"
+							"pTempData->nVersion = %d,\n"
+							"pTempData->hashPrevBlock = %s,\n"
+							"pTempData->hashMerkleRoot = %s,\n"
+							"pTempData->nTime = %lld,\n"
+							"pTempData->nBits = %u,\n"
+							"pTempData->nNonce = %u\n", thr_id,
+					pTempData.version, hashPrevBlock_str, hashMerkleRoot_str,
+					pTempData.timestamp, pTempData.bits, pTempData.nonce);
+			free(hashPrevBlock_str);
+			free(hashMerkleRoot_str);
+		}
+    }
     /* END print received data */
 
 	if (s_Nfactor == 0 && strlen(jane_params) > 0)
@@ -557,6 +558,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 		Nfactor = GetNfactor(bswap_32x4(pdata[17]));
 		block_header_size = 80;
 	}
+
 	if (Nfactor > scrypt_maxN) {
 		scrypt_fatal_error("scrypt: N out of range");
 	}
@@ -603,14 +605,16 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	uint32_t n = pdata[(block_header_size/4 - 1)];
 
-	uint32_t nTime = bswap_32x4(pdata[(block_header_size/4 - 3)]);
-	uint32_t nNonce = bswap_32x4(pdata[(block_header_size/4 - 1)]);
-
-	char *target_str = get_target_string(ptarget);
-	applog(LOG_ERR,
-			"TACA ===> scanhash_scrypt_jane[%d], block nTime = %lld, Nfactor = %d, target = %s, Htarg = %x, throughput = %d",
-			thr_id, nTime, Nfactor, target_str, Htarg, throughput);
-	free(target_str);
+    if (opt_debug)
+    {
+    	uint32_t nNonce = bswap_32x4(pdata[(block_header_size/4 - 1)]);
+		char *target_str = get_target_string(ptarget);
+		applog(LOG_DEBUG,
+				"TACA => scanhash_scrypt_jane[%d], Nfactor = %d, target = %s, Htarg = %x, throughput = %d, parallel = %d, nNonce = %u",
+				thr_id, Nfactor, target_str, Htarg, throughput, parallel,
+				nNonce);
+		free(target_str);
+    }
 
 	/* byte swap pdata into data[0]/[1] arrays */
 	for (int k=0; k<2; ++k) {
@@ -632,7 +636,6 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	int cur = 0, nxt = 1;
 	int iteration = 0;
-	applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], parallel = %d, nNonce = %u", thr_id, parallel, nNonce);
 
 	do {
 		nonce[nxt] = n;
@@ -708,19 +711,22 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			if (opt_debug && (iteration % 64 == 0))
 				applog(LOG_DEBUG, "GPU #%d: n=%x", device_map[thr_id], n);
 
-			for (int i=0; iteration > 0 && i<throughput; i++)
-			{
-				char *target_str = get_target_string(ptarget);
-				char *hash_cur_str = get_target_string(&hash[cur][8*i]);
-				char *hash_nxt_str = get_target_string(&hash[nxt][8*i]);
+		    if (opt_debug)
+		    {
+				for (int i = 0; iteration > 0 && i < throughput; i++) {
+					char *target_str = get_target_string(ptarget);
+					char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
+					char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
 
-				applog(LOG_ERR,
-						"TACA ===> scanhash_scrypt_jane[%d], BEFORE scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
-						thr_id, i, hash_cur_str, hash_nxt_str, Htarg, nonce[cur], nonce[nxt]);
-				free(target_str);
-				free(hash_cur_str);
-				free(hash_nxt_str);
-			}
+					applog(LOG_DEBUG,
+							"TACA => scanhash_scrypt_jane[%d], BEFORE scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+							thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
+							nonce[cur], nonce[nxt]);
+					free(target_str);
+					free(hash_cur_str);
+					free(hash_nxt_str);
+				}
+		    }
 
 			cuda_scrypt_serialize(thr_id, nxt);
 			pre_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
@@ -734,19 +740,24 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			cuda_scrypt_done(thr_id, nxt);
 
 			cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
-			for (int i=0; iteration > 0 && i<throughput; i++)
-			{
-				char *target_str = get_target_string(ptarget);
-				char *hash_cur_str = get_target_string(&hash[cur][8*i]);
-				char *hash_nxt_str = get_target_string(&hash[nxt][8*i]);
 
-				applog(LOG_ERR,
-						"TACA ===> scanhash_scrypt_jane[%d], AFTER scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
-						thr_id, i, hash_cur_str, hash_nxt_str, Htarg, nonce[cur], nonce[nxt]);
-				free(target_str);
-				free(hash_cur_str);
-				free(hash_nxt_str);
-			}
+		    if (opt_debug)
+		    {
+				for (int i=0; iteration > 0 && i<throughput; i++)
+				{
+					char *target_str = get_target_string(ptarget);
+					char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
+					char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
+
+					applog(LOG_DEBUG,
+							"TACA => scanhash_scrypt_jane[%d], AFTER scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+							thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
+							nonce[cur], nonce[nxt]);
+					free(target_str);
+					free(hash_cur_str);
+					free(hash_nxt_str);
+				}
+		    }
 			//cuda_scrypt_flush(thr_id, nxt); // made by cuda_scrypt_sync
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
 				break;
@@ -770,14 +781,14 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 				char *hash_cpu_str = get_target_string(thash);
 				char *hash_gpu_str = get_target_string(&hash[cur][8*i]);
-				applog(LOG_ERR,
-						"TACA ===> scanhash_scrypt_jane[%d], Found a possible solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
+				applog(LOG_NOTICE,
+						"TACA => scanhash_scrypt_jane[%d], FOUND a possible solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 						thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
 
 				if (memcmp(thash, &hash[cur][8*i], 32) == 0)
 				{
-					applog(LOG_ERR,
-							"TACA ===> scanhash_scrypt_jane[%d], Found a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
+					applog(LOG_NOTICE,
+							"TACA => scanhash_scrypt_jane[%d], FOUND a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
 					free(hash_cpu_str);
 					free(hash_gpu_str);
@@ -794,7 +805,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					free(hash_cpu_str);
 					free(hash_gpu_str);
 					applog(LOG_ERR,
-							"TACA ===> scanhash_scrypt_jane[%d], result does not validate on CPU", thr_id);
+							"TACA => scanhash_scrypt_jane[%d], result does not validate on CPU",
+							thr_id);
 					gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d, s=%d)", i, cur);
 				}
 			}
