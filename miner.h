@@ -341,7 +341,7 @@ extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsig
 extern int scanhash_scrypt(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
 	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end);
 extern int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
-	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end);
+	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end, int block_version);
 
 /* free device allocated memory per algo */
 void algo_free_all(int thr_id);
