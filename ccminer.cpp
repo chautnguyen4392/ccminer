@@ -665,8 +665,48 @@ bool jobj_binary(const json_t *obj, const char *key, void *buf, size_t buflen)
 		applog(LOG_ERR, "JSON key '%s' is not a string", key);
 		return false;
 	}
+	applog(LOG_NOTICE, "received JSON key '%s', data = %s", key, hexstr);
 	if (!hex2bin((uchar*)buf, hexstr, buflen))
 		return false;
+
+    if (opt_debug)
+    {
+    	/* BEGIN print received data */
+    	#pragma pack(push, 1)
+    	struct block_header
+    	{
+    		unsigned int version;
+    		uint32_t prev_block[8];
+    		uint32_t merkle_root[8];
+    		::int64_t timestamp;
+    		unsigned int bits;
+    		unsigned int nonce;
+
+    	};
+    	#pragma pack(pop)
+
+    	struct block_header pTempData;
+    	memcpy((void*)&pTempData, (const void*)buf, sizeof(pTempData));
+        // Byte reverse
+        for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+      //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+            ((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
+
+        char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+        char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+		applog(LOG_DEBUG, "TACA => jobj_binary, received block header data,\n"
+				"pTempData->nVersion = %d,\n"
+				"pTempData->hashPrevBlock = %s,\n"
+				"pTempData->hashMerkleRoot = %s,\n"
+				"pTempData->nTime = %lld,\n"
+				"pTempData->nBits = %u,\n"
+				"pTempData->nNonce = %u\n", pTempData.version,
+				hashPrevBlock_str, hashMerkleRoot_str, pTempData.timestamp,
+				pTempData.bits, pTempData.nonce);
+        free(hashPrevBlock_str);
+        free(hashMerkleRoot_str);
+        /* END print received data */
+    }
 
 	return true;
 }
@@ -971,6 +1011,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		uint32_t ntime, nonce = work->nonces[idnonce];
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
+		int nVersion;
 
 		switch (opt_algo) {
 		case ALGO_BLAKE:
@@ -1009,6 +1050,20 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			check_dups = true;
 			be32enc(&ntime, work->data[17]);
 			be32enc(&nonce, work->data[19]);
+			break;
+		case ALGO_SCRYPT_JANE:
+			nVersion = swab32(work->data[0]);
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				le32enc(&ntime, work->data[17]);
+				le32enc(&nonce, work->data[19]);
+			}
+			else
+			{
+				le32enc(&ntime, work->data[18]);
+				le32enc(&nonce, work->data[20]);
+			}
 			break;
 		default:
 			le32enc(&ntime, work->data[17]);
@@ -1107,6 +1162,48 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			applog(LOG_ERR, "submit_upstream_work OOM");
 			return false;
 		}
+
+	    if (opt_debug)
+	    {
+			/* BEGIN print received data */
+			#pragma pack(push, 1)
+			struct block_header
+			{
+				unsigned int version;
+				uint32_t prev_block[8];
+				uint32_t merkle_root[8];
+				::int64_t timestamp;
+				unsigned int bits;
+				unsigned int nonce;
+
+			};
+			#pragma pack(pop)
+
+			struct block_header pTempData;
+			memcpy((void*)&pTempData, (const void*)work->data, sizeof(pTempData));
+			// Byte reverse
+			for (unsigned int i = 0; i < sizeof(pTempData)/sizeof( uint32_t ); ++i)
+		  //for (int i = 0; i < 128/4; i++) //really, the limit is sizeof( *pdata ) / sizeof( uint32_t
+				((uint32_t *)&pTempData)[i] = swab32(((uint32_t *)&pTempData)[i]);
+
+			char *hashPrevBlock_str = get_target_string(pTempData.prev_block);
+			char *hashMerkleRoot_str = get_target_string(pTempData.merkle_root);
+			applog(LOG_DEBUG,
+					"TACA => submit_upstream_work, submit block header data,\n"
+							"pTempData->nVersion = %d,\n"
+							"pTempData->hashPrevBlock = %s,\n"
+							"pTempData->hashMerkleRoot = %s,\n"
+							"pTempData->nTime = %lld,\n"
+							"pTempData->nBits = %u,\n"
+							"pTempData->nNonce = %u\n", pTempData.version,
+					hashPrevBlock_str, hashMerkleRoot_str, pTempData.timestamp,
+					pTempData.bits, pTempData.nonce);
+			free(hashPrevBlock_str);
+			free(hashMerkleRoot_str);
+
+			/* END print received data */
+	    }
+
 
 		/* build JSON-RPC request */
 		sprintf(s,
@@ -1926,6 +2023,12 @@ static void *miner_thread(void *userdata)
 		}
 
 		uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + wcmplen);
+		int nVersion = swab32(work.data[0]);
+
+	    if (opt_debug)
+	    {
+	    	applog(LOG_DEBUG, "TACA => miner_thread[%d], opt_algo = %d, have_stratum = %d", thr_id, opt_algo, have_stratum);
+	    }
 
 		if (opt_algo == ALGO_WILDKECCAK) {
 			nonceptr = (uint32_t*) (((char*)work.data) + 1);
@@ -1937,6 +2040,15 @@ static void *miner_thread(void *userdata)
 		} else if (opt_algo == ALGO_EQUIHASH) {
 			nonceptr = &work.data[EQNONCE_OFFSET]; // 27 is pool extranonce (256bits nonce space)
 			wcmplen = 4+32+32;
+		}
+		else if (opt_algo == ALGO_SCRYPT_JANE)
+		{
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				nonceptr = (uint32_t*) (((char*)work.data) + 80);
+				wcmplen = 80;
+			}
 		}
 
 		if (have_stratum) {
@@ -1990,6 +2102,22 @@ static void *miner_thread(void *userdata)
 						goto out;
 					}
 				}
+				else
+				{
+					nVersion = swab32(g_work.data[0]);
+					if (nVersion >= 7)
+					{
+						// modify nNonce position, change to adapt with 64-bit nTime
+						nonceptr = (uint32_t*) (((char*)work.data) + 80);
+						wcmplen = 80;
+					    if (opt_debug)
+					    {
+							applog(LOG_DEBUG,
+									"TACA => miner_thread[%d], getwork successfully, nVersion = %d, nonceptr = %u",
+									thr_id, nVersion, *nonceptr);
+					    }
+					}
+				}
 				g_work_time = time(NULL);
 			}
 		}
@@ -2002,7 +2130,9 @@ static void *miner_thread(void *userdata)
 		{
 			if (opt_debug) {
 				uint64_t target64 = g_work.target[7] * 0x100000000ULL + g_work.target[6];
-				applog(LOG_DEBUG, "job %s target change: %llx (%.1f)", g_work.job_id, target64, g_work.targetdiff);
+				applog(LOG_DEBUG,
+						"TACA => miner_thread[%d], job %s target change: %llx (%.1f)",
+						thr_id, g_work.job_id, target64, g_work.targetdiff);
 			}
 			memcpy(work.target, g_work.target, sizeof(work.target));
 			work.targetdiff = g_work.targetdiff;
@@ -2014,6 +2144,22 @@ static void *miner_thread(void *userdata)
 			// ignore pok/version header
 			wcmpoft = 1;
 			wcmplen -= 4;
+		}
+
+		static __thread int hardFork = false;
+		if (!hardFork && opt_algo == ALGO_SCRYPT_JANE)
+		{
+			nVersion = swab32(g_work.data[0]);
+			if (nVersion >= 7)
+			{
+				// modify nNonce position, change to adapt with 64-bit nTime
+				nonceptr = (uint32_t*) (((char*)work.data) + 80);
+				wcmplen = 80;
+				hardFork = true;
+				applog(LOG_NOTICE,
+						"TACA => miner_thread[%d], yacoin hardfork happens, nVersion = %d, nonceptr = %u",
+						thr_id, nVersion, *nonceptr);
+			}
 		}
 
 		if (opt_algo == ALGO_CRYPTONIGHT || opt_algo == ALGO_CRYPTOLIGHT) {
@@ -2050,10 +2196,19 @@ static void *miner_thread(void *userdata)
 				}
 			}
 			#endif
+
 			memcpy(&work, &g_work, sizeof(struct work));
 			nonceptr[0] = (UINT32_MAX / opt_n_threads) * thr_id; // 0 if single thr
+		    if (opt_debug)
+		    {
+				applog(LOG_DEBUG,
+						"TACA => miner_thread[%d], copy g_work to work, nonceptr[0] = %u",
+						thr_id, nonceptr[0]);
+		    }
 		} else
+		{
 			nonceptr[0]++; //??
+		}
 
 		if (opt_algo == ALGO_DECRED) {
 			// suprnova job_id check without data/target/height change...
@@ -2347,6 +2502,13 @@ static void *miner_thread(void *userdata)
 
 		work.scanned_from = start_nonce;
 
+	    if (opt_debug)
+	    {
+			applog(LOG_DEBUG,
+					"TACA => miner_thread[%d], start=%08x end=%08x range=%08x",
+					thr_id, start_nonce, max_nonce, (max_nonce - start_nonce));
+	    }
+
 		gpulog(LOG_DEBUG, thr_id, "start=%08x end=%08x range=%08x",
 			start_nonce, max_nonce, (max_nonce-start_nonce));
 
@@ -2510,7 +2672,7 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SCRYPT_JANE:
 			rc = scanhash_scrypt_jane(thr_id, &work, max_nonce, &hashes_done,
-				NULL, &tv_start, &tv_end);
+				NULL, &tv_start, &tv_end, nVersion);
 			break;
 #endif
 		case ALGO_SKEIN:
