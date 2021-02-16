@@ -280,6 +280,9 @@ so we can more efficiently implement new algorithms using the latest hardware
 features.
 
 >>> RELEASE HISTORY <<<
+  Feb. 16th 2021  v2.3.2
+		  Modify scryptjane algo to work with 64bit nTime
+
   Jan. 30th 2019  v2.3.1
                   Handle Lyra2v3 algo
                   Handle sha256q algo

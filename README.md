@@ -2,9 +2,12 @@
 
 Based on Christian Buchner's &amp; Christian H.'s CUDA project, no more active on github since 2014.
 
+This is a modification for Yacoin to work with 64bit nTime and nFactor = 21. It is just for linux only
+
 Check the [README.txt](README.txt) for the additions
 
 BTC donation address: 1AJdfCpLWPNoAMDfHF1wD5y8VgKSSTHxPo (tpruvot)
+Yacoin donation address: YCk26dUcaXu8vu6zG3E2PrbBeECAV8RNFp (hbquan93)
 
 A part of the recent algos were originally written by [djm34](https://github.com/djm34) and [alexis78](https://github.com/alexis78)
 
