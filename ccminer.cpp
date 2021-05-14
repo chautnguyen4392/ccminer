@@ -1941,6 +1941,7 @@ static void *miner_thread(void *userdata)
 	uint64_t loopcnt = 0;
 	uint32_t max_nonce;
 	uint32_t end_nonce = UINT32_MAX / opt_n_threads * (thr_id + 1) - (thr_id + 1);
+	applog(LOG_ERR, "TACA ===> miner_thread[%d], opt_n_threads = %d, end_nonce = %d", thr_id, opt_n_threads, end_nonce);
 	time_t tm_rate_log = 0;
 	bool work_done = false;
 	bool extrajob = false;
@@ -4165,6 +4166,7 @@ int main(int argc, char *argv[])
 
 	// number of gpus
 	active_gpus = cuda_num_devices();
+	printf("TACA ===> active_gpus = %d\n\n", active_gpus);
 
 	for (i = 0; i < MAX_GPUS; i++) {
 		device_map[i] = i % active_gpus;
@@ -4318,6 +4320,8 @@ int main(int argc, char *argv[])
 
 	// generally doesn't work well...
 	gpu_threads = max(gpu_threads, opt_n_threads / active_gpus);
+
+    printf("TACA ===> opt_n_threads = %d, gpu_threads = %d\n\n", opt_n_threads, gpu_threads);
 
 	if (opt_benchmark && opt_algo == ALGO_AUTO) {
 		bench_init(opt_n_threads);

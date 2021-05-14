@@ -282,6 +282,8 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	checkCudaErrors(cudaGetDeviceProperties(&props, device_map[thr_id]));
 	concurrent = (props.concurrentKernels > 0);
 
+	applog(LOG_ERR, "GPU #%d: TACA ===> device_config[thr_id] = %s, props.name = %s, props.major = %d, props.minor = %d, props.multiProcessorCount = %d, props.warpSize = %d, props.concurrentKernels = %d", device_map[thr_id], device_config[thr_id], props.name, props.major, props.minor, props.multiProcessorCount, props.warpSize, props.concurrentKernels);
+
 	WARPS_PER_BLOCK = -1;
 
 	// if not specified, use interactive mode for devices that have the watchdog timer enabled
@@ -298,6 +300,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 
 	// figure out which kernel implementation to use
 	if (!validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK, &kernel, &props)) {
+		applog(LOG_ERR, "GPU #%d: TACA ===> !validate_config 1", device_map[thr_id]);
 		kernel = NULL;
 		if (device_config[thr_id] != NULL) {
 				 if (device_config[thr_id][0] == 'T' || device_config[thr_id][0] == 'Z')
@@ -314,6 +317,10 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 				kernel = new TestKernel();
 		}
 		if (kernel == NULL) kernel = Best_Kernel_Heuristics(&props);
+	}
+	else
+	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> validate_config 1, optimal_blocks = %d,	WARPS_PER_BLOCK = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK);
 	}
 
 	if (kernel->get_major_version() > props.major || kernel->get_major_version() == props.major && kernel->get_minor_version() > props.minor)
@@ -360,7 +367,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	unsigned int BACKOFF = device_backoff[thr_id];
 	unsigned int N = (1 << (opt_nfactor+1));
 	double szPerWarp = (double)(SCRATCH * WU_PER_WARP * sizeof(uint32_t));
-	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
+	applog(LOG_INFO, "TACA ===> WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
 	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp.", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0));
 
 	// compute highest MAXWARPS numbers for kernels allowing cudaBindTexture to succeed
@@ -371,6 +378,8 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	uint32_t *d_V = NULL;
 	if (device_singlememory[thr_id])
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> device_singlememory 1", device_map[thr_id]);
+
 		// if no launch config was specified, we simply
 		// allocate the single largest memory chunk on the device that we can get
 		if (validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK)) {
@@ -448,10 +457,18 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 	else
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> not device_singlememory", device_map[thr_id]);
+
 		if (validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK))
+		{
 			MAXWARPS[thr_id] = optimal_blocks * WARPS_PER_BLOCK;
+			applog(LOG_ERR, "GPU #%d: TACA ===> validate_config 2, optimal_blocks = %d,	WARPS_PER_BLOCK = %d, MAXWARPS[thr_id] = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK, MAXWARPS[thr_id]);
+		}
 		else
-			MAXWARPS[thr_id] = TOTAL_WARP_LIMIT;
+		{
+			MAXWARPS[thr_id] = TOTAL_WARP_LIMIT; // TACA ===> DEFAULT IS 4096
+			applog(LOG_ERR, "GPU #%d: TACA ===> !validate_config 2", device_map[thr_id]);
+		}
 
 		// chunked memory allocation up to device limits
 		int warp;
@@ -476,11 +493,14 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 			}
 		}
 		MAXWARPS[thr_id] = warp;
+		applog(LOG_ERR, "GPU #%d: TACA ===> MAXWARPS[thr_id] = %d", device_map[thr_id], MAXWARPS[thr_id]);
 	}
 	kernel->set_scratchbuf_constants(MAXWARPS[thr_id], h_V[thr_id]);
 
 	if (validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK))
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> validate_config 3, optimal_blocks = %d,	WARPS_PER_BLOCK = %d, MAXWARPS[thr_id] = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK, MAXWARPS[thr_id]);
+
 		if (optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
 		{
 			applog(LOG_ERR, "GPU #%d: FATAL: Given launch config '%s' requires too much memory.", device_map[thr_id], device_config[thr_id]);
@@ -495,6 +515,8 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 	else
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> !validate_config 3", device_map[thr_id]);
+
 		if (device_config[thr_id] != NULL && strcasecmp("auto", device_config[thr_id]))
 			applog(LOG_WARNING, "GPU #%d: Given launch config '%s' does not validate.", device_map[thr_id], device_config[thr_id]);
 
@@ -645,6 +667,7 @@ skip:           ;
 			// base the initial block estimate on the number of multiprocessors
 			int device_cores = props.multiProcessorCount * _ConvertSMVer2Cores(props.major, props.minor);
 
+			applog(LOG_ERR, "GPU #%d: TACA ===> device_cores = %d, props.multiProcessorCount = %d, _ConvertSMVer2Cores(props.major, props.minor) = %d, MAXWARPS[thr_id] = %d", device_map[thr_id], device_cores, props.multiProcessorCount, _ConvertSMVer2Cores(props.major, props.minor), MAXWARPS[thr_id]);
 			// defaults, in case nothing else is chosen below
 			optimal_blocks = 4 * device_cores / WU_PER_WARP;
 			WARPS_PER_BLOCK = 2;
@@ -652,17 +675,26 @@ skip:           ;
 			// Based on compute capability, pick a known good block x warp configuration.
 			if (props.major >= 3)
 			{
+				applog(LOG_ERR, "GPU #%d: TACA ===> props.major >= 3", device_map[thr_id]);
 				if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
 				{
+					applog(LOG_ERR, "GPU #%d: TACA ===> props.major == 3 && props.minor == 5", device_map[thr_id]);
 					// TODO: what to do with Titan and Tesla K20(X)?
 					// for now, do the same as for GTX 660Ti (2GB)
 					optimal_blocks = (int)(optimal_blocks * 0.8809524);
 					WARPS_PER_BLOCK = 2;
 				}
+				else if (props.major >= 7)
+				{
+					applog(LOG_ERR, "GPU #%d: TACA ===> props.major >= 7", device_map[thr_id]);
+					optimal_blocks = 40;
+					WARPS_PER_BLOCK = 1;
+				}
 				else // GK104, GK106, GK107 ...
 				{
 					if (MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2)
 					{
+						applog(LOG_ERR, "GPU #%d: TACA ===> MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2", device_map[thr_id]);
 						// this results in 290x2 configuration on GTX 660Ti (3GB)
 						// but it requires 3GB memory on the card!
 						optimal_blocks = (int)(optimal_blocks * 1.7261905);
@@ -670,6 +702,7 @@ skip:           ;
 					}
 					else
 					{
+						applog(LOG_ERR, "GPU #%d: TACA ===> not MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2", device_map[thr_id]);
 						// this results in 148x2 configuration on GTX 660Ti (2GB)
 						optimal_blocks = (int)(optimal_blocks * 0.8809524);
 						WARPS_PER_BLOCK = 2;
@@ -679,6 +712,7 @@ skip:           ;
 			// 1st generation Fermi (compute 2.0) GF100, GF110
 			else if (props.major == 2 && props.minor == 0)
 			{
+				applog(LOG_ERR, "GPU #%d: TACA ===> props.major == 2 && props.minor == 0",device_map[thr_id]);
 				// this results in a 60x4 configuration on GTX 570
 				optimal_blocks = 4 * device_cores / WU_PER_WARP;
 				WARPS_PER_BLOCK = 4;
@@ -686,6 +720,7 @@ skip:           ;
 			// 2nd generation Fermi (compute 2.1) GF104,106,108,114,116
 			else if (props.major == 2 && props.minor == 1)
 			{
+				applog(LOG_ERR, "GPU #%d: TACA ===> props.major == 2 && props.minor == 1", device_map[thr_id]);
 				// this results in a 56x2 configuration on GTX 460
 				optimal_blocks = props.multiProcessorCount * 8;
 				WARPS_PER_BLOCK = 2;
@@ -694,9 +729,17 @@ skip:           ;
 			// in case we run out of memory with the automatically chosen configuration,
 			// first back off with WARPS_PER_BLOCK, then reduce optimal_blocks.
 			if (WARPS_PER_BLOCK==3 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
+			{
+				applog(LOG_ERR, "GPU #%d: TACA ===> WARPS_PER_BLOCK==3 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id]", device_map[thr_id]);
 				WARPS_PER_BLOCK = 2;
+			}
 			while (optimal_blocks > 0 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
+			{
 				optimal_blocks--;
+				applog(LOG_ERR, "GPU #%d: TACA ===> optimal_blocks = %d > 0 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id]", device_map[thr_id], optimal_blocks);
+			}
+
+			applog(LOG_ERR, "GPU #%d: TACA ===> Heuristics, optimal_blocks = %d, WARPS_PER_BLOCK = %d, device_cores = %d, WU_PER_WARP = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK, device_cores, WU_PER_WARP);
 		}
 	}
 
@@ -704,6 +747,7 @@ skip:           ;
 
 	if (device_singlememory[thr_id])
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> device_singlememory[thr_id] 2", device_map[thr_id]);
 		if (MAXWARPS[thr_id] != optimal_blocks * WARPS_PER_BLOCK)
 		{
 			MAXWARPS[thr_id] = optimal_blocks * WARPS_PER_BLOCK;
@@ -747,14 +791,17 @@ skip:           ;
 	}
 	else
 	{
+		applog(LOG_ERR, "GPU #%d: TACA ===> not device_singlememory[thr_id] 2", device_map[thr_id]);
 		// back off unnecessary memory allocations to have some breathing room
 		while (MAXWARPS[thr_id] > 0 && MAXWARPS[thr_id] > optimal_blocks * WARPS_PER_BLOCK) {
+			applog(LOG_ERR, "GPU #%d: TACA ===> MAXWARPS[thr_id] > 0 && MAXWARPS[thr_id] > optimal_blocks * WARPS_PER_BLOCK", device_map[thr_id]);
 			(MAXWARPS[thr_id])--;
 			checkCudaErrors(cudaFree(h_V[thr_id][MAXWARPS[thr_id]]-h_V_extra[thr_id][MAXWARPS[thr_id]]));
 			h_V[thr_id][MAXWARPS[thr_id]] = NULL; h_V_extra[thr_id][MAXWARPS[thr_id]] = 0;
 		}
 	}
 
+	applog(LOG_ERR, "GPU #%d: TACA ===> return optimal_blocks = %d", device_map[thr_id], optimal_blocks);
 	return optimal_blocks;
 }
 

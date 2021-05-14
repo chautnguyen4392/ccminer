@@ -637,8 +637,11 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	do {
 		nonce[nxt] = n;
 
+		applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], nonce[%d] = %d", thr_id, nxt, nonce[nxt]);
+
 		if (parallel < 2)
 		{
+		    applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], parallel < 2, half of cpu", thr_id);
 			// half of cpu
 
 			for(int i=0;i<throughput;++i) {
@@ -705,8 +708,12 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			// all on gpu
 
 			n += throughput;
-			if (opt_debug && (iteration % 64 == 0))
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], parallel = 2, n = %d", thr_id, n);
+
+			if (opt_debug && (iteration % 64 == 0)) {
+			    applog(LOG_ERR, "TACA ===> GPU #%d: n=%x", device_map[thr_id], n);
 				applog(LOG_DEBUG, "GPU #%d: n=%x", device_map[thr_id], n);
+			}
 
 			for (int i=0; iteration > 0 && i<throughput; i++)
 			{
@@ -722,17 +729,29 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 				free(hash_nxt_str);
 			}
 
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_serialize", thr_id);
 			cuda_scrypt_serialize(thr_id, nxt);
+
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling pre_keccak512", thr_id);
 			pre_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
+
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_core", thr_id);
 			cuda_scrypt_core(thr_id, nxt, N);
+
 			//cuda_scrypt_flush(thr_id, nxt);
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_sync 1", thr_id);
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
+				applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], !cuda_scrypt_sync 1", thr_id);
 				break;
 			}
 
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling post_keccak512", thr_id);
 			post_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
+
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_done", thr_id);
 			cuda_scrypt_done(thr_id, nxt);
 
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_DtoH", thr_id);
 			cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
 			for (int i=0; iteration > 0 && i<throughput; i++)
 			{
@@ -748,7 +767,10 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 				free(hash_nxt_str);
 			}
 			//cuda_scrypt_flush(thr_id, nxt); // made by cuda_scrypt_sync
+
+			applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], calling cuda_scrypt_sync 2", thr_id);
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
+				applog(LOG_ERR, "TACA ===> scanhash_scrypt_jane[%d], !cuda_scrypt_sync 2", thr_id);
 				break;
 			}
 		}
