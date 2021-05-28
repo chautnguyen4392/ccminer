@@ -243,7 +243,6 @@ inline int _ConvertSMVer2Cores(int major, int minor)
 		{ 0x50, 128 }, // Maxwell First Generation (SM 5.0) GTX750/750Ti
 		{ 0x52, 128 }, // Maxwell Second Generation (SM 5.2) GTX980 = 2048 cores / 16 SMs - GTX970 1664 cores / 13 SMs
 		{ 0x61, 128 }, // Pascal GeForce (SM 6.1)
-		{ 0x75, 64 }, // Turing GeForce (SM 7.5)
 		{ -1, -1 },
 	};
 
