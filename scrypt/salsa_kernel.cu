@@ -243,6 +243,7 @@ inline int _ConvertSMVer2Cores(int major, int minor)
 		{ 0x50, 128 }, // Maxwell First Generation (SM 5.0) GTX750/750Ti
 		{ 0x52, 128 }, // Maxwell Second Generation (SM 5.2) GTX980 = 2048 cores / 16 SMs - GTX970 1664 cores / 13 SMs
 		{ 0x61, 128 }, // Pascal GeForce (SM 6.1)
+		{ 0x75, 64 }, // Turing GeForce (SM 7.5)
 		{ -1, -1 },
 	};
 
@@ -650,7 +651,12 @@ skip:           ;
 			WARPS_PER_BLOCK = 2;
 
 			// Based on compute capability, pick a known good block x warp configuration.
-			if (props.major >= 3)
+			if (props.major >= 7)
+			{
+				optimal_blocks = 40;
+				WARPS_PER_BLOCK = 2;
+			}
+			else if (props.major >= 3)
 			{
 				if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
 				{
