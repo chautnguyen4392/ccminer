@@ -685,12 +685,12 @@ skip:           ;
 					optimal_blocks = (int)(optimal_blocks * 0.8809524);
 					WARPS_PER_BLOCK = 2;
 				}
-				else if (props.major >= 7)
-				{
-					applog(LOG_ERR, "GPU #%d: TACA ===> props.major >= 7", device_map[thr_id]);
-					optimal_blocks = 40;
-					WARPS_PER_BLOCK = 1;
-				}
+				// else if (props.major >= 7)
+				// {
+				// 	applog(LOG_ERR, "GPU #%d: TACA ===> props.major >= 7", device_map[thr_id]);
+				// 	optimal_blocks = 40;
+				// 	WARPS_PER_BLOCK = 1;
+				// }
 				else // GK104, GK106, GK107 ...
 				{
 					if (MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2)
