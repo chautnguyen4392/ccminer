@@ -361,7 +361,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	unsigned int BACKOFF = device_backoff[thr_id];
 	unsigned int N = (1 << (opt_nfactor+1));
 	double szPerWarp = (double)(SCRATCH * WU_PER_WARP * sizeof(uint32_t));
-	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
+	applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
 	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp.", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0));
 
 	// compute highest MAXWARPS numbers for kernels allowing cudaBindTexture to succeed
@@ -760,7 +760,7 @@ skip:           ;
 			h_V[thr_id][MAXWARPS[thr_id]] = NULL; h_V_extra[thr_id][MAXWARPS[thr_id]] = 0;
 		}
 	}
-
+	applog(LOG_INFO, "GPU #%d: optimal_blocks = %d, WARPS_PER_BLOCK = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK);
 	return optimal_blocks;
 }
 
