@@ -243,6 +243,7 @@ inline int _ConvertSMVer2Cores(int major, int minor)
 		{ 0x50, 128 }, // Maxwell First Generation (SM 5.0) GTX750/750Ti
 		{ 0x52, 128 }, // Maxwell Second Generation (SM 5.2) GTX980 = 2048 cores / 16 SMs - GTX970 1664 cores / 13 SMs
 		{ 0x61, 128 }, // Pascal GeForce (SM 6.1)
+		{ 0x75, 64 }, // Turing GeForce (SM 7.5)
 		{ -1, -1 },
 	};
 
@@ -360,7 +361,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	unsigned int BACKOFF = device_backoff[thr_id];
 	unsigned int N = (1 << (opt_nfactor+1));
 	double szPerWarp = (double)(SCRATCH * WU_PER_WARP * sizeof(uint32_t));
-	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
+	applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
 	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp.", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0));
 
 	// compute highest MAXWARPS numbers for kernels allowing cudaBindTexture to succeed
@@ -650,7 +651,12 @@ skip:           ;
 			WARPS_PER_BLOCK = 2;
 
 			// Based on compute capability, pick a known good block x warp configuration.
-			if (props.major >= 3)
+			if (props.major >= 7)
+			{
+				optimal_blocks = 40;
+				WARPS_PER_BLOCK = 2;
+			}
+			else if (props.major >= 3)
 			{
 				if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
 				{
@@ -754,7 +760,7 @@ skip:           ;
 			h_V[thr_id][MAXWARPS[thr_id]] = NULL; h_V_extra[thr_id][MAXWARPS[thr_id]] = 0;
 		}
 	}
-
+	applog(LOG_INFO, "GPU #%d: optimal_blocks = %d, WARPS_PER_BLOCK = %d", device_map[thr_id], optimal_blocks, WARPS_PER_BLOCK);
 	return optimal_blocks;
 }
 
