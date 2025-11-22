@@ -4194,7 +4194,7 @@ int main(int argc, char *argv[])
 		device_backoff[i] = is_windows() ? 12 : 2;
 		device_bfactor[i] = is_windows() ? 11 : 0;
 		device_lookup_gap[i] = 1;
-		device_batchsize[i] = 1024;
+		device_batchsize[i] = 4194304;
 		device_interactive[i] = -1;
 		device_texturecache[i] = -1;
 		device_singlememory[i] = -1;
