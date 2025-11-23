@@ -127,8 +127,9 @@ void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 		uint4 tmp = b; b = (c ? bx : b); bx = (c ? tmp : bx);
 		bx = shfl4(bx, (threadIdx.x + 28)&31);
 	} else {
-		b = *((uint4 *)(&scratch[start]));
-		bx = *((uint4 *)(&scratch[start+16]));
+		// Use __ldg() for read-only cache optimization (Pascal+)
+		b = __ldg((uint4 *)(&scratch[start]));
+		bx = __ldg((uint4 *)(&scratch[start+16]));
 	}
 }
 
