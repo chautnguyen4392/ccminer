@@ -18,12 +18,6 @@
 
 #define THREADS_PER_WU 4  // four threads per hash
 
-typedef enum
-{
-	ANDERSEN,
-	SIMPLE
-} MemoryAccess;
-
 #if __CUDA_ARCH__ < 320
 	// Kepler (Compute 3.0)
 	#define __ldg(x) (*(x))
@@ -98,39 +92,21 @@ static __device__ uint4 shfl4(const uint4 bx, int target_thread) {
  * the relative start location, as an attempt to reduce some recomputation.
  */
 
-template <MemoryAccess SCHEME> __device__ __forceinline__
+__device__ __forceinline__
 void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 {
 	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
-	if (SCHEME == ANDERSEN) {
-		int target_thread = (threadIdx.x + 4)&31;
-		uint4 t = b, t2 = shfl4(bx, target_thread);
-		int t2_start = __shfl2((int)start, target_thread) + 4;
-		bool c = (threadIdx.x & 0x4);
-		*((uint4 *)(&scratch[c ? t2_start : start])) = (c ? t2 : t);
-		*((uint4 *)(&scratch[c ? start : t2_start])) = (c ? t : t2);
-	} else {
-		*((uint4 *)(&scratch[start   ])) = b;
-		*((uint4 *)(&scratch[start+16])) = bx;
-	}
+	*((uint4 *)(&scratch[start   ])) = b;
+	*((uint4 *)(&scratch[start+16])) = bx;
 }
 
-template <MemoryAccess SCHEME> __device__ __forceinline__
+__device__ __forceinline__
 void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
 	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
-	if (SCHEME == ANDERSEN) {
-		int t2_start = __shfl2((int)start, (threadIdx.x + 4)&31) + 4;
-		bool c = (threadIdx.x & 0x4);
-		b  = __ldg((uint4 *)(&scratch[c ? t2_start : start]));
-		bx = __ldg((uint4 *)(&scratch[c ? start : t2_start]));
-		uint4 tmp = b; b = (c ? bx : b); bx = (c ? tmp : bx);
-		bx = shfl4(bx, (threadIdx.x + 28)&31);
-	} else {
-		// Use __ldg() for read-only cache optimization (Pascal+)
-		b = __ldg((uint4 *)(&scratch[start]));
-		bx = __ldg((uint4 *)(&scratch[start+16]));
-	}
+	// Use __ldg() for read-only cache optimization (Pascal+)
+	b = __ldg((uint4 *)(&scratch[start]));
+	bx = __ldg((uint4 *)(&scratch[start+16]));
 }
 
 __device__  __forceinline__
@@ -176,62 +152,7 @@ void primary_order_shuffle(uint4 &b, uint4 &bx) {
  * in internal processing order.
  */
 __device__  __forceinline__
-void load_key_salsa(const uint32_t *B, uint4 &b, uint4 &bx)
-{
-	uint32_t scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	uint32_t thread_in_block = threadIdx.x & 3U;
-	uint32_t key_offset = scrypt_block * 32 + (thread_in_block*4);
-
-	// Read in permuted order. Key loads are not our bottleneck right now.
-	b.x  = B[key_offset + (thread_in_block+0) & 3U];
-	b.y  = B[key_offset + (thread_in_block+1) & 3U];
-	b.z  = B[key_offset + (thread_in_block+2) & 3U];
-	b.w  = B[key_offset + (thread_in_block+3) & 3U];
-
-	key_offset += 16;
-	bx.x = B[key_offset + (thread_in_block+0) & 3U];
-	bx.y = B[key_offset + (thread_in_block+1) & 3U];
-	bx.z = B[key_offset + (thread_in_block+2) & 3U];
-	bx.w = B[key_offset + (thread_in_block+3) & 3U];
-
-	primary_order_shuffle(b, bx);
-}
-
-/*
- * store_key performs the opposite transform as load_key, taking
- * internally-ordered b and bx and storing them into a contiguous
- * region of B in external order.
- */
-__device__  __forceinline__
-void store_key_salsa(uint32_t *B, uint4 &b, uint4 &bx)
-{
-	uint32_t scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	uint32_t thread_in_block = threadIdx.x & 3U;
-	uint32_t key_offset = scrypt_block * 32 + (thread_in_block*4);
-
-	primary_order_shuffle(b, bx);
-
-	B[key_offset + (thread_in_block+0) & 3U] = b.x;
-	B[key_offset + (thread_in_block+1) & 3U] = b.y;
-	B[key_offset + (thread_in_block+2) & 3U] = b.z;
-	B[key_offset + (thread_in_block+3) & 3U] = b.w;
-
-	key_offset += 16;
-	B[key_offset + (thread_in_block+0) & 3U] = bx.x;
-	B[key_offset + (thread_in_block+1) & 3U] = bx.y;
-	B[key_offset + (thread_in_block+2) & 3U] = bx.z;
-	B[key_offset + (thread_in_block+3) & 3U] = bx.w;
-}
-
-
-/*
- * load_key loads a 32*32bit key from a contiguous region of memory in B.
- * The input keys are in external order (i.e., 0, 1, 2, 3, ...).
- * After loading, each thread has its four b and four bx keys stored
- * in internal processing order.
- */
-__device__  __forceinline__
-void load_key_chacha(const uint32_t *B, uint4 &b, uint4 &bx)
+void load_key(const uint32_t *B, uint4 &b, uint4 &bx)
 {
 	uint32_t scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
 	uint32_t thread_in_block = threadIdx.x & 3U;
@@ -256,7 +177,7 @@ void load_key_chacha(const uint32_t *B, uint4 &b, uint4 &bx)
  * region of B in external order.
  */
 __device__  __forceinline__
-void store_key_chacha(uint32_t *B, const uint4 &b, const uint4 &bx)
+void store_key(uint32_t *B, const uint4 &b, const uint4 &bx)
 {
 	uint32_t scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
 	uint32_t thread_in_block = threadIdx.x & 3U;
@@ -273,127 +194,6 @@ void store_key_chacha(uint32_t *B, const uint4 &b, const uint4 &bx)
 	B[key_offset + 4*2] = bx.z;
 	B[key_offset + 4*3] = bx.w;
 }
-
-
-template <int ALGO> __device__  __forceinline__
-void load_key(const uint32_t *B, uint4 &b, uint4 &bx)
-{
-	switch(ALGO) {
-	case A_SCRYPT:      load_key_salsa(B, b, bx); break;
-	case A_SCRYPT_JANE: load_key_chacha(B, b, bx); break;
-	}
-}
-
-template <int ALGO> __device__  __forceinline__
-void store_key(uint32_t *B, uint4 &b, uint4 &bx)
-{
-	switch(ALGO) {
-	case A_SCRYPT:      store_key_salsa(B, b, bx); break;
-	case A_SCRYPT_JANE: store_key_chacha(B, b, bx); break;
-	}
-}
-
-
-/*
- * salsa_xor_core (Salsa20/8 cypher)
- * The original scrypt called:
- * xor_salsa8(&X[0], &X[16]); <-- the "b" loop
- * xor_salsa8(&X[16], &X[0]); <-- the "bx" loop
- * This version is unrolled to handle both of these loops in a single
- * call to avoid unnecessary data movement.
- */
-
-#if __CUDA_ARCH__ < 350
-	// Kepler (Compute 3.0)
-	#define XOR_ROTATE_ADD(dst, s1, s2, amt) { uint32_t tmp = s1+s2; dst ^= ((tmp<<amt)|(tmp>>(32-amt))); }
-#else
-	// Kepler (Compute 3.5)
-	#define ROTL(a, b) __funnelshift_l( a, a, b );
-	#define XOR_ROTATE_ADD(dst, s1, s2, amt) dst ^= ROTL(s1+s2, amt);
-#endif
-
-
-__device__  __forceinline__
-void salsa_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
-{
-	uint4 x;
-
-	b ^= bx;
-	x = b;
-
-	// Enter in "primary order" (t0 has  0,  4,  8, 12)
-	//                          (t1 has  5,  9, 13,  1)
-	//                          (t2 has 10, 14,  2,  6)
-	//                          (t3 has 15,  3,  7, 11)
-
-	#pragma unroll
-	for (int j = 0; j < 4; j++)
-	{
-		// Mixing phase of salsa
-		XOR_ROTATE_ADD(x.y, x.x, x.w, 7);
-		XOR_ROTATE_ADD(x.z, x.y, x.x, 9);
-		XOR_ROTATE_ADD(x.w, x.z, x.y, 13);
-		XOR_ROTATE_ADD(x.x, x.w, x.z, 18);
-
-		/* Transpose rows and columns. */
-		/* Unclear if this optimization is needed: These are ordered based
-		 * upon the dependencies needed in the later xors. Compiler should be
-		 * able to figure this out, but might as well give it a hand. */
-		x.y = __shfl2((int)x.y, x3);
-		x.w = __shfl2((int)x.w, x1);
-		x.z = __shfl2((int)x.z, x2);
-
-		/* The next XOR_ROTATE_ADDS could be written to be a copy-paste of the first,
-		 * but the register targets are rewritten here to swap x[1] and x[3] so that
-		 * they can be directly shuffled to and from our peer threads without
-		 * reassignment. The reverse shuffle then puts them back in the right place.
-		 */
-
-		XOR_ROTATE_ADD(x.w, x.x, x.y, 7);
-		XOR_ROTATE_ADD(x.z, x.w, x.x, 9);
-		XOR_ROTATE_ADD(x.y, x.z, x.w, 13);
-		XOR_ROTATE_ADD(x.x, x.y, x.z, 18);
-
-		x.w = __shfl2((int)x.w, x3);
-		x.y = __shfl2((int)x.y, x1);
-		x.z = __shfl2((int)x.z, x2);
-	}
-
-	b += x;
-	// The next two lines are the beginning of the BX-centric loop iteration
-	bx ^= b;
-	x = bx;
-
-	// This is a copy of the same loop above, identical but stripped of comments.
-	// Duplicated so that we can complete a bx-based loop with fewer register moves.
-	#pragma unroll 4
-	for (int j = 0; j < 4; j++)
-	{
-		XOR_ROTATE_ADD(x.y, x.x, x.w, 7);
-		XOR_ROTATE_ADD(x.z, x.y, x.x, 9);
-		XOR_ROTATE_ADD(x.w, x.z, x.y, 13);
-		XOR_ROTATE_ADD(x.x, x.w, x.z, 18);
-
-		x.y = __shfl2((int)x.y, x3);
-		x.w = __shfl2((int)x.w, x1);
-		x.z = __shfl2((int)x.z, x2);
-
-		XOR_ROTATE_ADD(x.w, x.x, x.y, 7);
-		XOR_ROTATE_ADD(x.z, x.w, x.x, 9);
-		XOR_ROTATE_ADD(x.y, x.z, x.w, 13);
-		XOR_ROTATE_ADD(x.x, x.y, x.z, 18);
-
-		x.w = __shfl2((int)x.w, x3);
-		x.y = __shfl2((int)x.y, x1);
-		x.z = __shfl2((int)x.z, x2);
-	}
-
-	// At the end of these iterations, the data is in primary order again.
-#undef XOR_ROTATE_ADD
-
-	bx += x;
-}
-
 
 /*
  * chacha_xor_core (ChaCha20/8 cypher)
@@ -487,13 +287,10 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 }
 
 
-template <int ALGO> __device__  __forceinline__
+__device__  __forceinline__
 void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
 {
-	switch(ALGO) {
-	case A_SCRYPT:      salsa_xor_core(b, bx, x1, x2, x3); break;
-	case A_SCRYPT_JANE: chacha_xor_core(b, bx, x1, x2, x3); break;
-	}
+	chacha_xor_core(b, bx, x1, x2, x3);
 }
 
 
@@ -517,7 +314,7 @@ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
  * and similarly for kx.
  */
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+__global__
 void titan_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 {
 	uint4 b, bx;
@@ -527,24 +324,26 @@ void titan_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = (scrypt_block*c_SCRATCH + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+	int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
 
-	int i=begin;
+	int i = begin;
 
 	if (i == 0) {
-		load_key<ALGO>(d_idata, b, bx);
-		write_keys_direct<SCHEME>(b, bx, start);
+		load_key(d_idata, b, bx);
+		write_keys_direct(b, bx, start);
 		++i;
-	} else read_keys_direct<SCHEME>(b, bx, start+32*(i-1));
+	} else {
+		read_keys_direct(b, bx, start+32*(i-1));
+	}
 
 	while (i < end) {
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
-		write_keys_direct<SCHEME>(b, bx, start+32*i);
+		block_mixer(b, bx, x1, x2, x3);
+		write_keys_direct(b, bx, start+32*i);
 		++i;
 	}
 }
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+__global__
 void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
@@ -554,24 +353,25 @@ void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, u
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = (scrypt_block*c_SCRATCH + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+	int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
 
-	int i=begin;
+	int i = begin;
 
 	if (i == 0) {
-		load_key<ALGO>(d_idata, b, bx);
-		write_keys_direct<SCHEME>(b, bx, start);
+		load_key(d_idata, b, bx);
+		write_keys_direct(b, bx, start);
 		++i;
 	} else {
-		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
-		read_keys_direct<SCHEME>(b, bx, start+32*pos);
-		while(loop--) block_mixer<ALGO>(b, bx, x1, x2, x3);
+		int pos = (i-1)/LOOKUP_GAP;
+		int loop = (i-1) - pos*LOOKUP_GAP;
+		read_keys_direct(b, bx, start+32*pos);
+		while (loop--) block_mixer(b, bx, x1, x2, x3);
 	}
 
 	while (i < end) {
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 		if (i % LOOKUP_GAP == 0)
-			write_keys_direct<SCHEME>(b, bx, start+32*(i/LOOKUP_GAP));
+			write_keys_direct(b, bx, start+32*(i/LOOKUP_GAP));
 		++i;
 	}
 }
@@ -583,101 +383,86 @@ void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, u
  * the scratch buffer in pseudorandom order, mixing the key as it goes.
  */
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+__global__
 void titan_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 {
 	uint4 b, bx;
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = ((scrypt_block*c_SCRATCH) + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+	int start = ((scrypt_block*c_SCRATCH) + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
 
 	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
 	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
 	if (begin == 0) {
-		read_keys_direct<SCHEME>(b, bx, start+32*c_N_1);
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
-	} else load_key<ALGO>(d_odata, b, bx);
+		read_keys_direct(b, bx, start+32*c_N_1);
+		block_mixer(b, bx, x1, x2, x3);
+	} else {
+		load_key(d_odata, b, bx);
+	}
 
 	for (int i = begin; i < end; i++) {
 		int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-		uint4 t, tx; read_keys_direct<SCHEME>(t, tx, start+32*j);
+		uint4 t, tx;
+		read_keys_direct(t, tx, start+32*j);
 		b ^= t; bx ^= tx;
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 	}
 
-	store_key<ALGO>(d_odata, b, bx);
+	store_key(d_odata, b, bx);
 }
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+__global__
 void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = ((scrypt_block*c_SCRATCH) + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+	int start = ((scrypt_block*c_SCRATCH) + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
 
 	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
 	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
 	if (begin == 0) {
-		int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
-		read_keys_direct<SCHEME>(b, bx, start+32*pos);
-		while(loop--)
-			block_mixer<ALGO>(b, bx, x1, x2, x3);
+		int pos = c_N_1/LOOKUP_GAP;
+		int loop = 1 + (c_N_1 - pos*LOOKUP_GAP);
+		read_keys_direct(b, bx, start+32*pos);
+		while (loop--)
+			block_mixer(b, bx, x1, x2, x3);
+	} else {
+		load_key(d_odata, b, bx);
 	}
-	else
-			load_key<ALGO>(d_odata, b, bx);
 
-	if (SCHEME == SIMPLE)
+	int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
+	int pos = j/LOOKUP_GAP;
+	int loop = -1;
+	uint4 t, tx;
+
+	int i = begin;
+	while (i < end)
 	{
-		// better divergent thread handling submitted by nVidia engineers, but
-		// supposedly this does not run with the ANDERSEN memory access scheme
-		int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-		int pos = j/LOOKUP_GAP;
-		int loop = -1;
-		uint4 t, tx;
-
-		int i = begin;
-		while(i < end)
-		{
-			if (loop == -1) {
-				j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-				pos = j/LOOKUP_GAP;
-				loop = j-pos*LOOKUP_GAP;
-				read_keys_direct<SCHEME>(t, tx, start+32*pos);
-			}
-			if (loop == 0) {
-				b ^= t; bx ^= tx;
-				t=b;tx=bx;
-			}
-
-			block_mixer<ALGO>(t, tx, x1, x2, x3);
-			if (loop == 0) {
-				b=t;bx=tx;
-				i++;
-			}
-			loop--;
+		if (loop == -1) {
+			j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
+			pos = j/LOOKUP_GAP;
+			loop = j - pos*LOOKUP_GAP;
+			read_keys_direct(t, tx, start+32*pos);
 		}
-	}
-	else
-	{
-		// this is my original implementation, now used with the ANDERSEN
-		// memory access scheme only.
-		for (int i = begin; i < end; i++) {
-			int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-			int pos = j/LOOKUP_GAP, loop = j-pos*LOOKUP_GAP;
-			uint4 t, tx; read_keys_direct<SCHEME>(t, tx, start+32*pos);
-			while (loop--)
-				block_mixer<ALGO>(t, tx, x1, x2, x3);
+		if (loop == 0) {
 			b ^= t; bx ^= tx;
-			block_mixer<ALGO>(b, bx, x1, x2, x3);
+			t = b; tx = bx;
 		}
+
+		block_mixer(t, tx, x1, x2, x3);
+		if (loop == 0) {
+			b = t; bx = tx;
+			i++;
+		}
+		loop--;
 	}
 
-	store_key<ALGO>(d_odata, b, bx);
+	store_key(d_odata, b, bx);
 }
 
 
@@ -694,8 +479,8 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark, int texture_cache)
 {
 	bool success = true;
-	bool scrypt = IS_SCRYPT();
-	bool chacha = IS_SCRYPT_JANE();
+	if (!IS_SCRYPT_JANE())
+		return false;
 
 	// make some constants available to kernel, update only initially and when changing
 	static uint32_t prev_N[MAX_GPUS] = { 0 };
@@ -723,11 +508,9 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	unsigned int pos = 0;
 	do {
 		if (LOOKUP_GAP == 1) {
-			if (scrypt) titan_scrypt_core_kernelA<A_SCRYPT,    ANDERSEN> <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
-			if (chacha) titan_scrypt_core_kernelA<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
+			titan_scrypt_core_kernelA <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
 		} else {
-			if (scrypt) titan_scrypt_core_kernelA_LG<A_SCRYPT,    ANDERSEN> <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (chacha) titan_scrypt_core_kernelA_LG<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
+			titan_scrypt_core_kernelA_LG <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 		pos += batch;
 
@@ -738,11 +521,9 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	pos = 0;
 	do {
 		if (LOOKUP_GAP == 1)  {
-			if (scrypt) titan_scrypt_core_kernelB<A_SCRYPT,    ANDERSEN> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-			if (chacha) titan_scrypt_core_kernelB<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
+			titan_scrypt_core_kernelB <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
 		} else {
-			if (scrypt) titan_scrypt_core_kernelB_LG<A_SCRYPT,    ANDERSEN> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (chacha) titan_scrypt_core_kernelB_LG<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			titan_scrypt_core_kernelB_LG <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 		pos += batch;
 
