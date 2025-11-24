@@ -8,12 +8,18 @@
 
 #include "miner.h"
 
+#include <map>
+#include <cuda_runtime.h>
+
 #include "scrypt/scrypt-jane.h"
 #include "scrypt/code/scrypt-jane-portable.h"
 #include "scrypt/code/scrypt-jane-chacha.h"
 #include "scrypt/keccak.h"
 
 #include "scrypt/salsa_kernel.h"
+
+// External CUDA stream for timing
+extern std::map<int, cudaStream_t> context_streams[2];
 
 #define scrypt_maxN 30  /* (1 << (30 + 1)) = ~2 billion */
 #define scrypt_r_32kb 8 /* (1 << 8) = 256 * 2 blocks in a chunk * 64 bytes = Max of 32kb in a chunk */
@@ -605,14 +611,14 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 	uint32_t n = pdata[(block_header_size/4 - 1)];
 
-    if (opt_debug)
+	// LOG INITIAL DATA
     {
     	uint32_t nNonce = bswap_32x4(pdata[(block_header_size/4 - 1)]);
 		char *target_str = get_target_string(ptarget);
-		applog(LOG_DEBUG,
-				"TACA => scanhash_scrypt_jane[%d], Nfactor = %d, target = %s, Htarg = %x, throughput = %d, parallel = %d, nNonce = %u",
+		applog(LOG_INFO,
+				"TACA => scanhash_scrypt_jane[%d], Nfactor = %d, target = %s, Htarg = %x, throughput = %d, parallel = %d, nNonce = %u, max_nonce = %u",
 				thr_id, Nfactor, target_str, Htarg, throughput, parallel,
-				nNonce);
+				nNonce, max_nonce);
 		free(target_str);
     }
 
@@ -708,8 +714,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			// all on gpu
 
 			n += throughput;
-			if (opt_debug && (iteration % 64 == 0))
-				applog(LOG_DEBUG, "GPU #%d: n=%x", device_map[thr_id], n);
+			if (opt_debug)
+				applog(LOG_DEBUG, "GPU #%d: n=%u, max_nonce = %u", device_map[thr_id], n, max_nonce);
 
 		    if (opt_debug)
 		    {
@@ -730,7 +736,42 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 			cuda_scrypt_serialize(thr_id, nxt);
 			pre_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
-			cuda_scrypt_core(thr_id, nxt, N);
+			
+			// Measure cuda_scrypt_core execution time
+			static __thread cudaEvent_t timing_start = NULL;
+			static __thread cudaEvent_t timing_end = NULL;
+			static __thread bool timing_initialized = false;
+			
+			if (!timing_initialized) {
+				cudaError_t err1 = cudaEventCreate(&timing_start);
+				cudaError_t err2 = cudaEventCreate(&timing_end);
+				if (err1 != cudaSuccess || err2 != cudaSuccess) {
+					gpulog(LOG_WARNING, thr_id, "Failed to create CUDA events for timing");
+				} else {
+					timing_initialized = true;
+				}
+			}
+			
+			if (timing_initialized && context_streams[nxt].find(thr_id) != context_streams[nxt].end()) {
+				cudaEventRecord(timing_start, context_streams[nxt][thr_id]);
+				cuda_scrypt_core(thr_id, nxt, N);
+				cudaEventRecord(timing_end, context_streams[nxt][thr_id]);
+				cudaEventSynchronize(timing_end);
+				
+				float elapsed_ms = 0.0f;
+				cudaError_t err = cudaEventElapsedTime(&elapsed_ms, timing_start, timing_end);
+				if (err == cudaSuccess) {
+					// Calculate H/s: throughput / elapsed_ms * 1000 (convert ms to seconds)
+					float hashes_per_sec = (elapsed_ms > 0.0f) ? (throughput / elapsed_ms * 1000.0f) : 0.0f;
+					// Log timing information
+					applog(LOG_INFO, "GPU #%d: cuda_scrypt_core execution time: %.3f ms (n=%u, iteration=%d, H/s=%.2f)", 
+							device_map[thr_id], elapsed_ms, n, iteration, hashes_per_sec);
+				}
+			} else {
+				// Fallback: execute without timing if events not available
+				cuda_scrypt_core(thr_id, nxt, N);
+			}
+			
 			//cuda_scrypt_flush(thr_id, nxt);
 			if (!cuda_scrypt_sync(thr_id, nxt)) {
 				break;
