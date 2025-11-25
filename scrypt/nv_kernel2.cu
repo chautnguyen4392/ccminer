@@ -31,10 +31,10 @@
 static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm( "mov.u32 %0, %%laneid;" : "=r"( laneId ) ); return laneId; }
 
 // forward references
-template <int ALGO> __global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end);
-template <int ALGO> __global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end);
-template <int ALGO> __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP);
-template <int ALGO> __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP);
+__global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end);
+__global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end);
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP);
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP);
 
 // scratchbuf constants (pointers to scratch buffer for each work unit)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
@@ -56,9 +56,8 @@ void NV2Kernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 
 bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark, int texture_cache)
 {
-	bool success = true;
-	bool scrypt = IS_SCRYPT();
-	bool chacha = IS_SCRYPT_JANE();
+	if (!IS_SCRYPT_JANE())
+		return false;
 
 	// make some constants available to kernel, update only initially and when changing
 	static uint32_t prev_N[MAX_GPUS] = { 0 };
@@ -82,11 +81,9 @@ bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr
 	do
 	{
 		if (LOOKUP_GAP == 1) {
-			if (scrypt) nv2_scrypt_core_kernelA<A_SCRYPT>     <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
-			if (chacha) nv2_scrypt_core_kernelA<A_SCRYPT_JANE><<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
+			nv2_scrypt_core_kernelA<<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
 		} else {
-			if (scrypt) nv2_scrypt_core_kernelA_LG<A_SCRYPT>     <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (chacha) nv2_scrypt_core_kernelA_LG<A_SCRYPT_JANE><<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
+			nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 		pos += batch;
 	} while (pos < N);
@@ -96,17 +93,14 @@ bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr
 	do
 	{
 		if (LOOKUP_GAP == 1) {
-			if (scrypt) nv2_scrypt_core_kernelB<A_SCRYPT     > <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-			if (chacha) nv2_scrypt_core_kernelB<A_SCRYPT_JANE> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
+			nv2_scrypt_core_kernelB<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
 		} else {
-			if (scrypt) nv2_scrypt_core_kernelB_LG<A_SCRYPT     > <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (chacha) nv2_scrypt_core_kernelB_LG<A_SCRYPT_JANE> <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
-
 		pos += batch;
 	} while (pos < N);
 
-	return success;
+	return true;
 }
 
 static __device__ uint4& operator^=(uint4& left, const uint4& right)
@@ -268,88 +262,6 @@ __device__ __forceinline__ void __transposed_xor_BC(const uint4 *S, uint4 (&B)[4
 
 
 
-#if 0
-
-#define QUARTER(a,b,c,d) \
-	a += b; d ^= a; d = ROTL(d,16); \
-	c += d; b ^= c; b = ROTL(b,12); \
-	a += b; d ^= a; d = ROTL(d,8); \
-	c += d; b ^= c; b = ROTL(b,7);
-
-static __device__ void xor_chacha8(uint4 *B, uint4 *C)
-{
-	uint32_t x[16];
-	x[0]=(B[0].x ^= C[0].x);
-	x[1]=(B[0].y ^= C[0].y);
-	x[2]=(B[0].z ^= C[0].z);
-	x[3]=(B[0].w ^= C[0].w);
-	x[4]=(B[1].x ^= C[1].x);
-	x[5]=(B[1].y ^= C[1].y);
-	x[6]=(B[1].z ^= C[1].z);
-	x[7]=(B[1].w ^= C[1].w);
-	x[8]=(B[2].x ^= C[2].x);
-	x[9]=(B[2].y ^= C[2].y);
-	x[10]=(B[2].z ^= C[2].z);
-	x[11]=(B[2].w ^= C[2].w);
-	x[12]=(B[3].x ^= C[3].x);
-	x[13]=(B[3].y ^= C[3].y);
-	x[14]=(B[3].z ^= C[3].z);
-	x[15]=(B[3].w ^= C[3].w);
-
-	/* Operate on columns. */
-	QUARTER( x[0], x[4], x[ 8], x[12] )
-	QUARTER( x[1], x[5], x[ 9], x[13] )
-	QUARTER( x[2], x[6], x[10], x[14] )
-	QUARTER( x[3], x[7], x[11], x[15] )
-
-	/* Operate on diagonals */
-	QUARTER( x[0], x[5], x[10], x[15] )
-	QUARTER( x[1], x[6], x[11], x[12] )
-	QUARTER( x[2], x[7], x[ 8], x[13] )
-	QUARTER( x[3], x[4], x[ 9], x[14] )
-
-	/* Operate on columns. */
-	QUARTER( x[0], x[4], x[ 8], x[12] )
-	QUARTER( x[1], x[5], x[ 9], x[13] )
-	QUARTER( x[2], x[6], x[10], x[14] )
-	QUARTER( x[3], x[7], x[11], x[15] )
-
-	/* Operate on diagonals */
-	QUARTER( x[0], x[5], x[10], x[15] )
-	QUARTER( x[1], x[6], x[11], x[12] )
-	QUARTER( x[2], x[7], x[ 8], x[13] )
-	QUARTER( x[3], x[4], x[ 9], x[14] )
-
-	/* Operate on columns. */
-	QUARTER( x[0], x[4], x[ 8], x[12] )
-	QUARTER( x[1], x[5], x[ 9], x[13] )
-	QUARTER( x[2], x[6], x[10], x[14] )
-	QUARTER( x[3], x[7], x[11], x[15] )
-
-	/* Operate on diagonals */
-	QUARTER( x[0], x[5], x[10], x[15] )
-	QUARTER( x[1], x[6], x[11], x[12] )
-	QUARTER( x[2], x[7], x[ 8], x[13] )
-	QUARTER( x[3], x[4], x[ 9], x[14] )
-
-	/* Operate on columns. */
-	QUARTER( x[0], x[4], x[ 8], x[12] )
-	QUARTER( x[1], x[5], x[ 9], x[13] )
-	QUARTER( x[2], x[6], x[10], x[14] )
-	QUARTER( x[3], x[7], x[11], x[15] )
-
-	/* Operate on diagonals */
-	QUARTER( x[0], x[5], x[10], x[15] )
-	QUARTER( x[1], x[6], x[11], x[12] )
-	QUARTER( x[2], x[7], x[ 8], x[13] )
-	QUARTER( x[3], x[4], x[ 9], x[14] )
-
-	B[0].x += x[0]; B[0].y += x[1]; B[0].z += x[2];  B[0].w += x[3];  B[1].x += x[4];  B[1].y += x[5];  B[1].z += x[6];  B[1].w += x[7];
-	B[2].x += x[8]; B[2].y += x[9]; B[2].z += x[10]; B[2].w += x[11]; B[3].x += x[12]; B[3].y += x[13]; B[3].z += x[14]; B[3].w += x[15];
-}
-
-#else
-
 #define ADD4(d1,d2,d3,d4,s1,s2,s3,s4) \
 	d1 += s1; d2 += s2; d3 += s3; d4 += s4;
 
@@ -436,113 +348,13 @@ static __device__ void xor_chacha8(uint4 *B, uint4 *C)
 	B[2].x += x[8]; B[2].y += x[9]; B[2].z += x[10]; B[2].w += x[11]; B[3].x += x[12]; B[3].y += x[13]; B[3].z += x[14]; B[3].w += x[15];
 }
 
-#endif
-
-
-#define ROTL7(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 7); a1^=ROTL(a10, 7); a2^=ROTL(a20, 7); a3^=ROTL(a30, 7);\
-};\
-
-#define ROTL9(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 9); a1^=ROTL(a10, 9); a2^=ROTL(a20, 9); a3^=ROTL(a30, 9);\
-};\
-
-#define ROTL13(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 13); a1^=ROTL(a10, 13); a2^=ROTL(a20, 13); a3^=ROTL(a30, 13);\
-};\
-
-#define ROTL18(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 18); a1^=ROTL(a10, 18); a2^=ROTL(a20, 18); a3^=ROTL(a30, 18);\
-};\
-
-static __device__ void xor_salsa8(uint4 *B, uint4 *C)
-{
-	uint32_t x[16];
-	x[0]=(B[0].x ^= C[0].x);
-	x[1]=(B[0].y ^= C[0].y);
-	x[2]=(B[0].z ^= C[0].z);
-	x[3]=(B[0].w ^= C[0].w);
-	x[4]=(B[1].x ^= C[1].x);
-	x[5]=(B[1].y ^= C[1].y);
-	x[6]=(B[1].z ^= C[1].z);
-	x[7]=(B[1].w ^= C[1].w);
-	x[8]=(B[2].x ^= C[2].x);
-	x[9]=(B[2].y ^= C[2].y);
-	x[10]=(B[2].z ^= C[2].z);
-	x[11]=(B[2].w ^= C[2].w);
-	x[12]=(B[3].x ^= C[3].x);
-	x[13]=(B[3].y ^= C[3].y);
-	x[14]=(B[3].z ^= C[3].z);
-	x[15]=(B[3].w ^= C[3].w);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	B[0].x += x[0]; B[0].y += x[1]; B[0].z += x[2];  B[0].w += x[3];  B[1].x += x[4];  B[1].y += x[5];  B[1].z += x[6];  B[1].w += x[7];
-	B[2].x += x[8]; B[2].y += x[9]; B[2].z += x[10]; B[2].w += x[11]; B[3].x += x[12]; B[3].y += x[13]; B[3].z += x[14]; B[3].w += x[15];
-}
-
-
-template <int ALGO> static __device__ void block_mixer(uint4 *B, uint4 *C)
-{
-  switch (ALGO)
-  {
-	case A_SCRYPT:      xor_salsa8(B, C); break;
-	case A_SCRYPT_JANE: xor_chacha8(B, C); break;
-  }
-}
 
 ////////////////////////////////////////////////////////////////////////////////
-//! Experimental Scrypt core kernel for Titan devices.
+//! Experimental Scrypt-Jane core kernel for Titan devices.
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-template <int ALGO> __global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end)
+__global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_idata += 32 * offset;
@@ -558,13 +370,13 @@ template <int ALGO> __global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, i
 		__transposed_read_BC((uint4*)(V + (i-1)*32), B, C, c_N, 0);
 
 	while(i < end) {
-		block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 		__transposed_write_BC(B, C, (uint4*)(V + i*32), c_N);
 		++i;
 	}
 }
 
-template <int ALGO> __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP)
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_idata += 32 * offset;
@@ -579,18 +391,18 @@ template <int ALGO> __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata
 	} else {
 		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
 		__transposed_read_BC((uint4*)(V + pos*32), B, C, c_spacing, 0);
-		while(loop--) { block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B); }
+		while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 	}
 
 	while(i < end) {
-		block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
 		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), c_spacing);
 		++i;
 	}
 }
 
-template <int ALGO> __global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end)
+__global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_odata += 32 * offset;
@@ -599,20 +411,20 @@ template <int ALGO> __global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, i
 
 	if(begin == 0) {
 		__transposed_read_BC((uint4*)V, B, C, c_N, c_N_1);
-		block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	} else
 		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
 
 	for (int i = begin; i < end; i++)  {
 		int slot = C[0].x & c_N_1;
 		__transposed_xor_BC((uint4*)(V), B, C, c_N, slot);
-		block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);
 }
 
-template <int ALGO> __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP)
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_odata += 32 * offset;
@@ -622,7 +434,7 @@ template <int ALGO> __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata
 	if(begin == 0) {
 	  int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
 	  __transposed_read_BC((uint4*)V, B, C, c_spacing, pos);
-	  while(loop--) { block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B); }
+	  while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 	} else {
 		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
 	}
@@ -631,10 +443,10 @@ template <int ALGO> __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata
 		int slot = C[0].x & c_N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
 		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, c_spacing, pos);
-		while(loop--) { block_mixer<ALGO>(b, c); block_mixer<ALGO>(c, b); }
+		while(loop--) { xor_chacha8(b, c); xor_chacha8(c, b); }
 #pragma unroll 4
 		for(int n = 0; n < 4; n++) { B[n] ^= b[n]; C[n] ^= c[n]; }
-		block_mixer<ALGO>(B, C); block_mixer<ALGO>(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);
