@@ -81,13 +81,36 @@ static __device__ uint4& operator += (uint4& left, const uint4& right) {
  * _direct lets the caller specify the absolute start location instead of
  * the relative start location, as an attempt to reduce some recomputation.
  */
+ __device__ __forceinline__
+ uint4 ldcg_uint4(const uint4* ptr)
+ {
+	 const uint32_t* p = reinterpret_cast<const uint32_t*>(ptr);
+	 uint4 v;
+ 
+	 v.x = __ldcg(p + 0);
+	 v.y = __ldcg(p + 1);
+	 v.z = __ldcg(p + 2);
+	 v.w = __ldcg(p + 3);
+	 return v;
+ }
+
+ __device__ __forceinline__
+void stcg_uint4(uint4* ptr, const uint4 &v)
+{
+    uint32_t* p = reinterpret_cast<uint32_t*>(ptr);
+
+    asm volatile ("st.cg.global.u32 [%0], %1;" :: "l"((unsigned long long)(p+0)), "r"(v.x));
+    asm volatile ("st.cg.global.u32 [%0], %1;" :: "l"((unsigned long long)(p+1)), "r"(v.y));
+    asm volatile ("st.cg.global.u32 [%0], %1;" :: "l"((unsigned long long)(p+2)), "r"(v.z));
+    asm volatile ("st.cg.global.u32 [%0], %1;" :: "l"((unsigned long long)(p+3)), "r"(v.w));
+}
 
 __device__ __forceinline__
 void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 {
 	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
-	*((uint4 *)(&scratch[start   ])) = b;
-	*((uint4 *)(&scratch[start+16])) = bx;
+	stcg_uint4((uint4 *)(&scratch[start   ]), b);
+	stcg_uint4((uint4 *)(&scratch[start+16]), bx);
 }
 
 __device__ __forceinline__
@@ -95,8 +118,8 @@ void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
 	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
 	// Use __ldg() for read-only cache optimization (Pascal+)
-	b = __ldg((uint4 *)(&scratch[start]));
-	bx = __ldg((uint4 *)(&scratch[start+16]));
+	b = ldcg_uint4((uint4 *)(&scratch[start]));
+	bx = ldcg_uint4((uint4 *)(&scratch[start+16]));
 }
 
 /*
