@@ -483,8 +483,8 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	{
 		if (optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
 		{
-			applog(LOG_ERR, "GPU #%d: FATAL: Given launch config '%s' requires too much memory.", device_map[thr_id], device_config[thr_id]);
-			return 0;
+			optimal_blocks = MAXWARPS[thr_id] / WARPS_PER_BLOCK;
+			applog(LOG_ERR, "GPU #%d: FATAL: Given launch config '%s' requires too much memory, adjust it to %dx%d.", device_map[thr_id], device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK);
 		}
 
 		if (WARPS_PER_BLOCK > kernel->max_warps_per_block())
@@ -650,7 +650,13 @@ skip:           ;
 			WARPS_PER_BLOCK = 2;
 
 			// Based on compute capability, pick a known good block x warp configuration.
-			if (props.major >= 3)
+			if (props.major >= 6 && props.minor >= 1)
+			{
+				size_t warpSize = SCRATCH * WU_PER_WARP * sizeof(uint32_t);
+				optimal_blocks = MAXWARPS[thr_id];
+				WARPS_PER_BLOCK = 1;
+			}
+			else if (props.major >= 3)
 			{
 				if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
 				{
