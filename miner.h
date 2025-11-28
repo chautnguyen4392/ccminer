@@ -2,6 +2,9 @@
 #define __MINER_H__
 
 #ifdef __cplusplus
+#include <algorithm>
+using std::min;
+using std::max;
 extern "C" {
 #endif
 
@@ -98,11 +101,13 @@ typedef unsigned char uchar;
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #endif
 
-#ifndef max
-# define max(a, b)  ((a) > (b) ? (a) : (b))
-#endif
-#ifndef min
-# define min(a, b)  ((a) < (b) ? (a) : (b))
+#ifndef __cplusplus
+# ifndef max
+#  define max(a, b)  ((a) > (b) ? (a) : (b))
+# endif
+# ifndef min
+#  define min(a, b)  ((a) < (b) ? (a) : (b))
+# endif
 #endif
 
 #ifndef UINT32_MAX

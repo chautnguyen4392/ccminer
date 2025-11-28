@@ -38,9 +38,9 @@
 
 extern "C" {
 #include <sph/sph_whirlpool.h>
-#include <miner.h>
 }
 
+#include <miner.h>
 #include <cuda_helper.h>
 #include <cuda_vector_uint2x4.h>
 #include <cuda_vectors.h>
