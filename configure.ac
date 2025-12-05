@@ -134,6 +134,20 @@ AC_ARG_WITH([nvml],
 
 AM_CONDITIONAL([HAVE_NVML], [test -n "$with_nvml"])
 
+dnl CUDA architecture options
+AC_ARG_ENABLE([gen75],
+   [AS_HELP_STRING([--enable-gen75], [enable CUDA compute capability 7.5 (Turing) support])],
+   [enable_gen75=$enableval],
+   [enable_gen75=no])
+
+AC_ARG_ENABLE([gen86],
+   [AS_HELP_STRING([--enable-gen86], [enable CUDA compute capability 8.6 (Ampere) support])],
+   [enable_gen86=$enableval],
+   [enable_gen86=no])
+
+AM_CONDITIONAL([WANT_GEN75], [test x$enable_gen75 = xyes])
+AM_CONDITIONAL([WANT_GEN86], [test x$enable_gen86 = xyes])
+
 NVCC="nvcc"
 
 if test -n "$with_cuda" ; then
@@ -145,6 +159,40 @@ else
   CUDA_LOCAL_PATH=/usr/local/cuda
 fi
 AC_SUBST(CUDA_LOCAL_PATH)
+
+dnl Detect CUDA toolkit version
+AC_MSG_CHECKING([for CUDA toolkit version])
+CUDA_VERSION=`$NVCC --version 2>/dev/null | grep "release" | sed 's/.*release \([[0-9]]*\)\.\([[0-9]]*\).*/\1.\2/'`
+if test -z "$CUDA_VERSION" ; then
+  AC_MSG_RESULT([not found])
+  AC_MSG_WARN([Could not detect CUDA version. Make sure nvcc is in PATH or use --with-cuda=PATH])
+  CUDA_MAJOR=0
+else
+  AC_MSG_RESULT([$CUDA_VERSION])
+  CUDA_MAJOR=`echo $CUDA_VERSION | cut -d. -f1`
+fi
+
+dnl Validate CUDA version for gen75 (requires CUDA 10+)
+if test x$enable_gen75 = xyes ; then
+  AC_MSG_CHECKING([if CUDA version supports compute_75 (Turing)])
+  if test "$CUDA_MAJOR" -lt 10 ; then
+    AC_MSG_RESULT([no])
+    AC_MSG_ERROR([--enable-gen75 requires CUDA 10.0 or later (detected: $CUDA_VERSION)])
+  else
+    AC_MSG_RESULT([yes])
+  fi
+fi
+
+dnl Validate CUDA version for gen86 (requires CUDA 11+)
+if test x$enable_gen86 = xyes ; then
+  AC_MSG_CHECKING([if CUDA version supports compute_86 (Ampere)])
+  if test "$CUDA_MAJOR" -lt 11 ; then
+    AC_MSG_RESULT([no])
+    AC_MSG_ERROR([--enable-gen86 requires CUDA 11.0 or later (detected: $CUDA_VERSION)])
+  else
+    AC_MSG_RESULT([yes])
+  fi
+fi
 
 CUDA_INCLUDES="-I$CUDA_LOCAL_PATH/include"
 CUDA_LDFLAGS="-L$CUDA_LOCAL_PATH/lib$SUFFIX"

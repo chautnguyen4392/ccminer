@@ -126,11 +126,21 @@ endif
 #ccminer_LDADD += -lsodium
 ccminer_LDADD += -lcuda
 
-nvcc_ARCH :=
-#nvcc_ARCH += -gencode=arch=compute_75,code=\"sm_75,compute_75\" # CUDA 10 req.
+# Default architecture (Pascal - GTX 1060/1070/1080)
+nvcc_ARCH := -gencode=arch=compute_61,code=\"sm_61,compute_61\"
+
+# Optional: Turing (RTX 2000 series) - requires CUDA 10+
+if WANT_GEN75
+nvcc_ARCH += -gencode=arch=compute_75,code=\"sm_75,compute_75\"
+endif
+
+# Optional: Ampere (RTX 3000 series) - requires CUDA 11+
+if WANT_GEN86
+nvcc_ARCH += -gencode=arch=compute_86,code=\"sm_86,compute_86\"
+endif
+
 #nvcc_ARCH += -gencode=arch=compute_72,code=\"sm_72,compute_72\" # CUDA 10 req.
 #nvcc_ARCH += -gencode=arch=compute_70,code=\"sm_70,compute_70\" # CUDA 9.1
-nvcc_ARCH += -gencode=arch=compute_86,code=\"sm_86,compute_86\" -gencode=arch=compute_61,code=\"sm_61,compute_61\" # CUDA 8
 #nvcc_ARCH += -gencode=arch=compute_52,code=\"sm_52,compute_52\"
 #nvcc_ARCH += -gencode=arch=compute_50,code=\"sm_50,compute_50\"
 #nvcc_ARCH += -gencode=arch=compute_35,code=\"sm_35,compute_35\"
