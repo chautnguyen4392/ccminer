@@ -537,211 +537,67 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 		if (device_config[thr_id] != NULL && strcasecmp("auto", device_config[thr_id]))
 			applog(LOG_WARNING, "GPU #%d: Given launch config '%s' does not validate.", device_map[thr_id], device_config[thr_id]);
 
-		if (opt_autotune)
+		// Heuristics to find a good kernel launch configuration
+		// base the initial block estimate on the number of multiprocessors
+		int device_cores = props.multiProcessorCount * _ConvertSMVer2Cores(props.major, props.minor);
+
+		// defaults, in case nothing else is chosen below
+		optimal_blocks = 4 * device_cores / WU_PER_WARP;
+		WARPS_PER_BLOCK = 2;
+
+		// Based on compute capability, pick a known good block x warp configuration.
+		if (props.major >= 6 && props.minor >= 1)
 		{
-			applog(LOG_INFO, "GPU #%d: Performing auto-tuning, please wait 2 minutes...", device_map[thr_id]);
-
-			// allocate device memory
-			uint32_t *d_idata = NULL, *d_odata = NULL;
-			unsigned int mem_size = MAXWARPS[thr_id] * WU_PER_WARP * sizeof(uint32_t) * 32;
-			checkCudaErrors(cudaMalloc((void **) &d_idata, mem_size));
-			checkCudaErrors(cudaMalloc((void **) &d_odata, mem_size));
-
-			// pre-initialize some device memory
-			uint32_t *h_idata = (uint32_t*)malloc(mem_size);
-			for (unsigned int i=0; i < mem_size/sizeof(uint32_t); ++i) h_idata[i] = i*2654435761UL; // knuth's method
-			checkCudaErrors(cudaMemcpy(d_idata, h_idata, mem_size, cudaMemcpyHostToDevice));
-			free(h_idata);
-
-			double best_hash_sec = 0.0;
-			int best_wpb = 0;
-
-			// auto-tuning loop
-			{
-				// we want to have enough total warps for half the multiprocessors at least
-				// compute highest MAXWARPS number that we can support based on texture cache mode
-				int MINTW = props.multiProcessorCount / 2;
-				int MAXTW = (device_texturecache[thr_id] == 1) ? min(MAXWARPS[thr_id],MW_1D) : MAXWARPS[thr_id];
-
-				// we want to have blocks for half the multiprocessors at least
-				int MINB = props.multiProcessorCount / 2;
-				int MAXB = MAXTW;
-
-				double tmin = 0.05;
-
-				applog(LOG_INFO, "GPU #%d: maximum total warps (BxW): %d", (int) device_map[thr_id], MAXTW);
-
-				for (int GRID_BLOCKS = MINB; !abort_flag && GRID_BLOCKS <= MAXB; ++GRID_BLOCKS)
-				{
-					double Hash[32+1] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
-					for (WARPS_PER_BLOCK = 1; !abort_flag && WARPS_PER_BLOCK <= kernel->max_warps_per_block(); ++WARPS_PER_BLOCK)
-					{
-						double hash_sec = 0;
-						if (GRID_BLOCKS * WARPS_PER_BLOCK >= MINTW &&
-							GRID_BLOCKS * WARPS_PER_BLOCK <= MAXTW)
-						{
-							// setup execution parameters
-							dim3  grid(WU_PER_LAUNCH/WU_PER_BLOCK, 1, 1);
-							dim3  threads(THREADS_PER_WU*WU_PER_BLOCK, 1, 1);
-
-							struct timeval tv_start, tv_end;
-							double tdelta = 0;
-
-							checkCudaErrors(cudaDeviceSynchronize());
-							gettimeofday(&tv_start, NULL);
-							int repeat = 0;
-							do  // average several measurements for better exactness
-							{
-								kernel->run_kernel(
-									grid, threads, WARPS_PER_BLOCK, thr_id, NULL, d_idata, d_odata, N,
-									LOOKUP_GAP, device_interactive[thr_id], true, device_texturecache[thr_id]
-								);
-								if(cudaDeviceSynchronize() != cudaSuccess)
-									break;
-								++repeat;
-								gettimeofday(&tv_end, NULL);
-								// for a better result averaging, measure for at least 50ms (10ms for Keccak)
-							} while ((tdelta=(1e-6 * (tv_end.tv_usec-tv_start.tv_usec) + (tv_end.tv_sec-tv_start.tv_sec))) < tmin);
-							if (cudaGetLastError() != cudaSuccess) continue;
-
-							tdelta /= repeat; // BUGFIX: this averaging over multiple measurements was missing
-
-							// for scrypt: in interactive mode only find launch configs where kernel launch times are short enough
-							// TODO: instead we could reduce the batchsize parameter to meet the launch time requirement.
-							if (IS_SCRYPT() && device_interactive[thr_id]
-								&& GRID_BLOCKS > 2*props.multiProcessorCount && tdelta > 1.0/30)
-							{
-								if (WARPS_PER_BLOCK == 1) goto skip; else goto skip2;
-							}
-
-							hash_sec = (double)WU_PER_LAUNCH / tdelta;
-							Hash[WARPS_PER_BLOCK] = hash_sec;
-							if (hash_sec > best_hash_sec) {
-								optimal_blocks = GRID_BLOCKS;
-								best_hash_sec = hash_sec;
-								best_wpb = WARPS_PER_BLOCK;
-							}
-						}
-					}
-skip2:
-					if (opt_debug) {
-
-						if (GRID_BLOCKS == MINB) {
-							char line[512] = "    ";
-							for (int i=1; i<=kernel->max_warps_per_block(); ++i) {
-								char tmp[16]; sprintf(tmp, i < 10 ? "   x%-2d" : "  x%-2d ", i);
-								strcat(line, tmp);
-								if (cw == 80 && (i % 8 == 0 && i != kernel->max_warps_per_block()))
-									strcat(line, "\n                          ");
-							}
-							applog(LOG_DEBUG, line);
-						}
-
-						char kMGT = ' '; bool flag;
-						for (int j=0; j < 4; ++j) {
-							flag=false; for (int i=1; i<=kernel->max_warps_per_block(); flag|=Hash[i] >= 1000, i++);
-							if (flag)   for (int i=1; i<=kernel->max_warps_per_block(); Hash[i] /= 1000, i++);
-							else break;
-								 if (kMGT == ' ') kMGT = 'k';
-							else if (kMGT == 'k') kMGT = 'M';
-							else if (kMGT == 'M') kMGT = 'G';
-							else if (kMGT == 'G') kMGT = 'T';
-						}
-						const char *format = "%5.4f%c";
-						flag = false; for (int i=1; i<=kernel->max_warps_per_block(); flag|=Hash[i] >= 1, i++); if (flag) format = "%5.3f%c";
-						flag = false; for (int i=1; i<=kernel->max_warps_per_block(); flag|=Hash[i] >= 10, i++); if (flag) format = "%5.2f%c";
-						flag = false; for (int i=1; i<=kernel->max_warps_per_block(); flag|=Hash[i] >= 100, i++); if (flag) format = "%5.1f%c";
-
-						char line[512]; sprintf(line, "%3d:", GRID_BLOCKS);
-						for (int i=1; i<=kernel->max_warps_per_block(); ++i) {
-							char tmp[16];
-							if (Hash[i]>0)
-								sprintf(tmp, format, Hash[i], (i<kernel->max_warps_per_block())?'|':' ');
-							else
-								sprintf(tmp, "     %c", (i<kernel->max_warps_per_block())?'|':' ');
-							strcat(line, tmp);
-							if (cw == 80 && (i % 8 == 0 && i != kernel->max_warps_per_block()))
-								strcat(line, "\n                          ");
-						}
-						int n = strlen(line)-1; line[n++] = '|'; line[n++] = ' '; line[n++] = kMGT; line[n++] = '\0';
-						strcat(line, "H/s");
-						applog(LOG_DEBUG, line);
-					}
-				}
-skip:           ;
-			}
-
-			checkCudaErrors(cudaFree(d_odata));
-			checkCudaErrors(cudaFree(d_idata));
-
-			WARPS_PER_BLOCK = best_wpb;
-			applog(LOG_INFO, "GPU #%d: %7.2f hash/s with configuration %c%dx%d", device_map[thr_id], best_hash_sec, kernel->get_identifier(), optimal_blocks, WARPS_PER_BLOCK);
+			optimal_blocks = MAXWARPS[thr_id];
+			WARPS_PER_BLOCK = 1;
 		}
-		else
+		else if (props.major >= 3)
 		{
-			// Heuristics to find a good kernel launch configuration
-
-			// base the initial block estimate on the number of multiprocessors
-			int device_cores = props.multiProcessorCount * _ConvertSMVer2Cores(props.major, props.minor);
-
-			// defaults, in case nothing else is chosen below
-			optimal_blocks = 4 * device_cores / WU_PER_WARP;
-			WARPS_PER_BLOCK = 2;
-
-			// Based on compute capability, pick a known good block x warp configuration.
-			if (props.major >= 6 && props.minor >= 1)
+			if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
 			{
-				optimal_blocks = MAXWARPS[thr_id];
-				WARPS_PER_BLOCK = 1;
+				// TODO: what to do with Titan and Tesla K20(X)?
+				// for now, do the same as for GTX 660Ti (2GB)
+				optimal_blocks = (int)(optimal_blocks * 0.8809524);
+				WARPS_PER_BLOCK = 2;
 			}
-			else if (props.major >= 3)
+			else // GK104, GK106, GK107 ...
 			{
-				if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
+				if (MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2)
 				{
-					// TODO: what to do with Titan and Tesla K20(X)?
-					// for now, do the same as for GTX 660Ti (2GB)
+					// this results in 290x2 configuration on GTX 660Ti (3GB)
+					// but it requires 3GB memory on the card!
+					optimal_blocks = (int)(optimal_blocks * 1.7261905);
+					WARPS_PER_BLOCK = 2;
+				}
+				else
+				{
+					// this results in 148x2 configuration on GTX 660Ti (2GB)
 					optimal_blocks = (int)(optimal_blocks * 0.8809524);
 					WARPS_PER_BLOCK = 2;
 				}
-				else // GK104, GK106, GK107 ...
-				{
-					if (MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2)
-					{
-						// this results in 290x2 configuration on GTX 660Ti (3GB)
-						// but it requires 3GB memory on the card!
-						optimal_blocks = (int)(optimal_blocks * 1.7261905);
-						WARPS_PER_BLOCK = 2;
-					}
-					else
-					{
-						// this results in 148x2 configuration on GTX 660Ti (2GB)
-						optimal_blocks = (int)(optimal_blocks * 0.8809524);
-						WARPS_PER_BLOCK = 2;
-					}
-				}
 			}
-			// 1st generation Fermi (compute 2.0) GF100, GF110
-			else if (props.major == 2 && props.minor == 0)
-			{
-				// this results in a 60x4 configuration on GTX 570
-				optimal_blocks = 4 * device_cores / WU_PER_WARP;
-				WARPS_PER_BLOCK = 4;
-			}
-			// 2nd generation Fermi (compute 2.1) GF104,106,108,114,116
-			else if (props.major == 2 && props.minor == 1)
-			{
-				// this results in a 56x2 configuration on GTX 460
-				optimal_blocks = props.multiProcessorCount * 8;
-				WARPS_PER_BLOCK = 2;
-			}
-
-			// in case we run out of memory with the automatically chosen configuration,
-			// first back off with WARPS_PER_BLOCK, then reduce optimal_blocks.
-			if (WARPS_PER_BLOCK==3 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
-				WARPS_PER_BLOCK = 2;
-			while (optimal_blocks > 0 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
-				optimal_blocks--;
 		}
+		// 1st generation Fermi (compute 2.0) GF100, GF110
+		else if (props.major == 2 && props.minor == 0)
+		{
+			// this results in a 60x4 configuration on GTX 570
+			optimal_blocks = 4 * device_cores / WU_PER_WARP;
+			WARPS_PER_BLOCK = 4;
+		}
+		// 2nd generation Fermi (compute 2.1) GF104,106,108,114,116
+		else if (props.major == 2 && props.minor == 1)
+		{
+			// this results in a 56x2 configuration on GTX 460
+			optimal_blocks = props.multiProcessorCount * 8;
+			WARPS_PER_BLOCK = 2;
+		}
+
+		// in case we run out of memory with the automatically chosen configuration,
+		// first back off with WARPS_PER_BLOCK, then reduce optimal_blocks.
+		if (WARPS_PER_BLOCK==3 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
+			WARPS_PER_BLOCK = 2;
+		while (optimal_blocks > 0 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
+			optimal_blocks--;
 	}
 
 	applog(LOG_INFO, "GPU #%d: using launch configuration %c%dx%d", device_map[thr_id], kernel->get_identifier(), optimal_blocks, WARPS_PER_BLOCK);

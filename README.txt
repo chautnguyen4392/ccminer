@@ -203,7 +203,6 @@ Scrypt specific options:
       --texture-cache   comma separated list of flags (0/1/2) specifying
                         which of the CUDA devices shall use the texture
                         cache for mining. Kepler devices may profit.
-      --no-autotune     disable auto-tuning of kernel launch parameters
 
 CryptoNight specific options:
   -l, --launch-config   gives the launch configuration for each kernel

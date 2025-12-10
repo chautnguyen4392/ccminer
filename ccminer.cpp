@@ -152,7 +152,6 @@ int device_bfactor[MAX_GPUS] = { 0 }; // cryptonight
 int device_lookup_gap[MAX_GPUS] = { 0 };
 int device_interactive[MAX_GPUS] = { 0 };
 int opt_nfactor = 0;
-bool opt_autotune = true;
 char *jane_params = NULL;
 
 // pools (failover/getwork infos)
@@ -414,7 +413,6 @@ struct option options[] = {
 	{ "no-gbt", 0, NULL, 1011 },
 	{ "no-longpoll", 0, NULL, 1003 },
 	{ "no-stratum", 0, NULL, 1007 },
-	{ "no-autotune", 0, NULL, 1004 },  // scrypt
 	{ "interactive", 1, NULL, 1050 },  // scrypt
 	{ "lookup-gap", 1, NULL, 'L' },    // scrypt
 	{ "texture-cache", 1, NULL, 1051 },// scrypt
@@ -488,7 +486,6 @@ Scrypt specific options:\n\
       --texture-cache   comma separated list of flags (0/1/2) specifying\n\
                         which of the CUDA devices shall use the texture\n\
                         cache for mining. Kepler devices may profit.\n\
-      --no-autotune     disable auto-tuning of kernel launch parameters\n\
 ";
 
 static char const xmr_usage[] = "\n\
@@ -2767,9 +2764,6 @@ void parse_arg(int key, char *arg)
 		break;
 	case 1002:
 		use_colors = false;
-		break;
-	case 1004:
-		opt_autotune = false;
 		break;
 	case 'l': /* --launch-config */
 		{
