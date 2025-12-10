@@ -23,26 +23,11 @@ extern char *device_name[MAX_GPUS];
 
 extern int opt_nfactor;
 extern char *jane_params;
-extern int parallel;
-
-extern void get_currentalgo(char* buf, int sz);
 
 typedef unsigned int uint32_t; // define this as 32 bit type derived from int
 
-// scrypt variants
-#define A_SCRYPT 0
+// scrypt variant (only scrypt-jane is supported)
 #define A_SCRYPT_JANE 1
-static char algo[64] = { 0 };
-static int scrypt_algo = -1;
-static __inline int get_scrypt_type() {
-	if (scrypt_algo != -1) return scrypt_algo;
-	get_currentalgo(algo, 64);
-	if (!strncasecmp(algo,"scrypt-jane",11)) scrypt_algo = A_SCRYPT_JANE;
-	else if (!strncasecmp(algo,"scrypt",6)) scrypt_algo = A_SCRYPT;
-	return scrypt_algo;
-}
-static __inline bool IS_SCRYPT() { get_scrypt_type(); return (scrypt_algo == A_SCRYPT); }
-static __inline bool IS_SCRYPT_JANE() { get_scrypt_type(); return (scrypt_algo == A_SCRYPT_JANE); }
 
 // CUDA externals
 extern int cuda_throughput(int thr_id);

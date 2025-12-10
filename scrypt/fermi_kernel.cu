@@ -25,12 +25,12 @@
 #define TEXWIDTH 32768
 
 // forward references
-template <int ALGO> __global__ void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N);
-template <int ALGO> __global__ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N);
-template <int ALGO, int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N);
-template <int ALGO> __global__ void fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOOKUP_GAP);
-template <int ALGO> __global__ void fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
-template <int ALGO, int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
+__global__ void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N);
+__global__ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N);
+template <int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N);
+__global__ void fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOOKUP_GAP);
+__global__ void fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
+template <int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
 
 // scratchbuf constants (pointers to scratch buffer for each warp, i.e. 32 hashes)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
@@ -95,21 +95,17 @@ bool FermiKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	// First phase: Sequential writes to scratchpad.
 
 	if (LOOKUP_GAP == 1) {
-		  if (IS_SCRYPT())      fermi_scrypt_core_kernelA<A_SCRYPT><<< grid, threads, shared, stream >>>(d_idata, N);
-		  if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelA<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_idata, N);
+		fermi_scrypt_core_kernelA<<< grid, threads, shared, stream >>>(d_idata, N);
 	} else {
-		  if (IS_SCRYPT())      fermi_scrypt_core_kernelA_LG<A_SCRYPT><<< grid, threads, shared, stream >>>(d_idata, N, LOOKUP_GAP);
-		  if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelA_LG<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_idata, N, LOOKUP_GAP);
+		fermi_scrypt_core_kernelA_LG<<< grid, threads, shared, stream >>>(d_idata, N, LOOKUP_GAP);
 	}
 
 	// Second phase: Random read access from scratchpad.
 
 	if (LOOKUP_GAP == 1) {
-		if (IS_SCRYPT())      fermi_scrypt_core_kernelB<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N);
-		if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelB<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N);
+		fermi_scrypt_core_kernelB<<< grid, threads, shared, stream >>>(d_odata, N);
 	} else {
-		if (IS_SCRYPT())       fermi_scrypt_core_kernelB_LG<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-		if (IS_SCRYPT_JANE())  fermi_scrypt_core_kernelB_LG<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
+		fermi_scrypt_core_kernelB_LG<<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
 	}
 
 	return success;
@@ -317,78 +313,6 @@ a2^=(((a20)<<18) | ((a20)>>14) );\
 a3^=(((a30)<<18) | ((a30)>>14) );\
 };\
 
-static __device__ void xor_salsa8(uint4 *B, uint4 *C)
-{
-	uint32_t x[16];
-	x[0]=(B[0].x ^= C[0].x);
-	x[1]=(B[0].y ^= C[0].y);
-	x[2]=(B[0].z ^= C[0].z);
-	x[3]=(B[0].w ^= C[0].w);
-	x[4]=(B[1].x ^= C[1].x);
-	x[5]=(B[1].y ^= C[1].y);
-	x[6]=(B[1].z ^= C[1].z);
-	x[7]=(B[1].w ^= C[1].w);
-	x[8]=(B[2].x ^= C[2].x);
-	x[9]=(B[2].y ^= C[2].y);
-	x[10]=(B[2].z ^= C[2].z);
-	x[11]=(B[2].w ^= C[2].w);
-	x[12]=(B[3].x ^= C[3].x);
-	x[13]=(B[3].y ^= C[3].y);
-	x[14]=(B[3].z ^= C[3].z);
-	x[15]=(B[3].w ^= C[3].w);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	/* Operate on columns. */
-	ROTL7(x[4],x[9],x[14],x[3],x[0]+x[12],x[1]+x[5],x[6]+x[10],x[11]+x[15]);
-	ROTL9(x[8],x[13],x[2],x[7],x[0]+x[4],x[5]+x[9],x[10]+x[14],x[3]+x[15]);
-	ROTL13(x[12],x[1],x[6],x[11],x[4]+x[8],x[9]+x[13],x[2]+x[14],x[3]+x[7]);
-	ROTL18(x[0],x[5],x[10],x[15],x[8]+x[12],x[1]+x[13],x[2]+x[6],x[7]+x[11]);
-
-	/* Operate on rows. */
-	ROTL7(x[1],x[6],x[11],x[12],x[0]+x[3],x[4]+x[5],x[9]+x[10],x[14]+x[15]);
-	ROTL9(x[2],x[7],x[8],x[13],x[0]+x[1],x[5]+x[6],x[10]+x[11],x[12]+x[15]);
-	ROTL13(x[3],x[4],x[9],x[14],x[1]+x[2],x[6]+x[7],x[8]+x[11],x[12]+x[13]);
-	ROTL18(x[0],x[5],x[10],x[15],x[2]+x[3],x[4]+x[7],x[8]+x[9],x[13]+x[14]);
-
-	B[0].x += x[0]; B[0].y += x[1]; B[0].z += x[2];  B[0].w += x[3];  B[1].x += x[4];  B[1].y += x[5];  B[1].z += x[6];  B[1].w += x[7];
-	B[2].x += x[8]; B[2].y += x[9]; B[2].z += x[10]; B[2].w += x[11]; B[3].x += x[12]; B[3].y += x[13]; B[3].z += x[14]; B[3].w += x[15];
-}
-
 static __device__ __forceinline__ uint4& operator^=(uint4& left, const uint4& right)
 {
 	left.x ^= right.x;
@@ -403,7 +327,7 @@ static __device__ __forceinline__ uint4& operator^=(uint4& left, const uint4& ri
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-template <int ALGO> __global__
+__global__
 void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N)
 {
 	extern __shared__ unsigned char x[];
@@ -443,10 +367,7 @@ void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N)
 
 	for (int i = 1; i < N; i++) {
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C); xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) *((uint4*)&XX[4*idx]) = B[idx];
@@ -462,7 +383,7 @@ void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N)
 	}
 }
 
-template <int ALGO> __global__
+__global__
 void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N)
 {
 	extern __shared__ unsigned char x[];
@@ -500,10 +421,7 @@ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N)
 #pragma unroll 4
 	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
 
-	switch(ALGO) {
-	case A_SCRYPT:      xor_salsa8(B, C); xor_salsa8(C, B); break;
-	case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-	}
+	xor_chacha8(B, C); xor_chacha8(C, B);
 
 	for (int i = 0; i < N; i++) {
 
@@ -521,10 +439,7 @@ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N)
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) C[idx] ^= *((uint4*)&XX[4*idx]);
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C); xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 #pragma unroll 4
@@ -541,7 +456,7 @@ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N)
 
 }
 
-template <int ALGO, int TEX_DIM> __global__ void
+template <int TEX_DIM> __global__ void
 fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N)
 {
 	extern __shared__ unsigned char x[];
@@ -582,10 +497,7 @@ fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N)
 #pragma unroll 4
 	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
 
-	switch(ALGO) {
-	case A_SCRYPT:      xor_salsa8(B, C); xor_salsa8(C, B); break;
-	case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-	}
+	xor_chacha8(B, C); xor_chacha8(C, B);
 
 	for (int i = 0; i < N; i++) {
 
@@ -607,10 +519,7 @@ fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N)
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) C[idx] ^= *((uint4*)&XX[4*idx]);
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 #pragma unroll 4
@@ -630,7 +539,7 @@ fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N)
 // Lookup-Gap variations of the above functions
 //
 
-template <int ALGO> __global__ void
+__global__ void
 fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOOKUP_GAP)
 {
 	extern __shared__ unsigned char x[];
@@ -669,10 +578,7 @@ fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOO
 
 	for (int i = 1; i < N; i++) {
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 
 		if (i % LOOKUP_GAP == 0) {
 #pragma unroll 4
@@ -690,7 +596,7 @@ fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOO
 	}
 }
 
-template <int ALGO> __global__ void
+__global__ void
 fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP)
 {
 	extern __shared__ unsigned char x[];
@@ -728,11 +634,9 @@ fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOO
 #pragma unroll 4
 	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
 
-	while (loop--)
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+	while (loop--) {
+		xor_chacha8(B, C); xor_chacha8(C, B);
+	}
 
 	for (int i = 0; i < N; i++) {
 
@@ -753,21 +657,16 @@ fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOO
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) c[idx] = *((uint4*)&XX[4*idx]);
 
-		while (loop--)
-			switch(ALGO) {
-			case A_SCRYPT:      xor_salsa8(b, c);  xor_salsa8(c, b); break;
-			case A_SCRYPT_JANE: xor_chacha8(b, c); xor_chacha8(c, b); break;
-			}
+		while (loop--) {
+			xor_chacha8(b, c); xor_chacha8(c, b);
+		}
 
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) B[idx] ^= b[idx];
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) C[idx] ^= c[idx];
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 #pragma unroll 4
@@ -784,7 +683,7 @@ fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOO
 
 }
 
-template <int ALGO, int TEX_DIM> __global__ void
+template <int TEX_DIM> __global__ void
 fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP)
 {
 	extern __shared__ unsigned char x[];
@@ -825,11 +724,9 @@ fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int
 #pragma unroll 4
 	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
 
-	while (loop--)
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+	while (loop--) {
+		xor_chacha8(B, C); xor_chacha8(C, B);
+	}
 
 	for (int i = 0; i < N; i++) {
 
@@ -854,21 +751,16 @@ fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) c[idx] = *((uint4*)&XX[4*idx]);
 
-		while (loop--)
-			switch(ALGO) {
-			case A_SCRYPT:      xor_salsa8(b, c);  xor_salsa8(c, b); break;
-			case A_SCRYPT_JANE: xor_chacha8(b, c); xor_chacha8(c, b); break;
-			}
+		while (loop--) {
+			xor_chacha8(b, c); xor_chacha8(c, b);
+		}
 
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) B[idx] ^= b[idx];
 #pragma unroll 4
 		for (int idx=0; idx < 4; idx++) C[idx] ^= c[idx];
 
-		switch(ALGO) {
-		case A_SCRYPT:      xor_salsa8(B, C);  xor_salsa8(C, B); break;
-		case A_SCRYPT_JANE: xor_chacha8(B, C); xor_chacha8(C, B); break;
-		}
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 #pragma unroll 4

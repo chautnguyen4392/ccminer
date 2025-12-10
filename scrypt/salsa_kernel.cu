@@ -57,9 +57,9 @@ KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
 	KernelInterface *kernel = NULL;
 	uint64_t N = 1UL << (opt_nfactor+1);
 
-	if (IS_SCRYPT() || (IS_SCRYPT_JANE() && N <= 8192))
+	if (N <= 8192)
 	{
-		// high register count kernels (scrypt, low N-factor scrypt-jane)
+		// low N-factor scrypt-jane = high register count kernels
 		if (props->major > 3 || (props->major == 3 && props->minor >= 5))
 			kernel = new NV2Kernel(); // we don't want this for Keccak though
 		else if (props->major == 3 && props->minor == 0)
@@ -69,8 +69,8 @@ KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
 	}
 	else
 	{
-	   // high N-factor scrypt-jane = low registers count kernels
-	   if (props->major > 3 || (props->major == 3 && props->minor >= 5))
+		// high N-factor scrypt-jane = low register count kernels
+		if (props->major > 3 || (props->major == 3 && props->minor >= 5))
 			kernel = new TitanKernel();
 		else if (props->major == 3 && props->minor == 0)
 			kernel = new KeplerKernel();
@@ -128,9 +128,7 @@ std::map<int, uint32_t *> context_X[2];
 std::map<int, uint32_t *> context_H[2];
 std::map<int, cudaEvent_t> context_serialize[2];
 
-// for SHA256 hashing on GPU
-std::map<int, uint32_t *> context_tstate[2];
-std::map<int, uint32_t *> context_ostate[2];
+// for scrypt-jane hashing on GPU
 std::map<int, uint32_t *> context_hash[2];
 
 int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurrent, int &wpb);
@@ -141,14 +139,8 @@ int cuda_throughput(int thr_id)
 	int GRID_BLOCKS, WARPS_PER_BLOCK;
 	if (context_blocks.find(thr_id) == context_blocks.end())
 	{
-#if 0
-		CUcontext ctx;
-		cuCtxCreate( &ctx, CU_CTX_SCHED_YIELD, device_map[thr_id] );
-		cuCtxSetCurrent(ctx);
-#else
 		checkCudaErrors(cudaSetDevice(device_map[thr_id]));
 		checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleYield));
-#endif
 
 		KernelInterface *kernel;
 		bool concurrent;
@@ -172,34 +164,12 @@ int cuda_throughput(int thr_id)
 		checkCudaErrors(cudaHostAlloc((void **) &tmp, state_size, cudaHostAllocDefault)); context_H[0][thr_id] = tmp;
 		checkCudaErrors(cudaHostAlloc((void **) &tmp, state_size, cudaHostAllocDefault)); context_H[1][thr_id] = tmp;
 
-		if (IS_SCRYPT())
-		{
-			if (parallel < 2)
-			{
-				// allocate pinned host memory for scrypt_core input/output
-				checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[0][thr_id] = tmp;
-				checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[1][thr_id] = tmp;
-			}
-			else
-			{
-				// allocate tstate, ostate, scrypt hash device memory
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_tstate[0][thr_id] = tmp;
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_tstate[1][thr_id] = tmp;
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_ostate[0][thr_id] = tmp;
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_ostate[1][thr_id] = tmp;
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[0][thr_id] = tmp;
-				checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[1][thr_id] = tmp;
-			}
-		}
-		else /* if (IS_SCRYPT_JANE()) */
-		{
-			// allocate pinned host memory for scrypt_core input/output
-			checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[0][thr_id] = tmp;
-			checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[1][thr_id] = tmp;
+		// allocate pinned host memory for scrypt_core input/output (scrypt-jane)
+		checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[0][thr_id] = tmp;
+		checkCudaErrors(cudaHostAlloc((void **) &tmp, mem_size, cudaHostAllocDefault)); context_X[1][thr_id] = tmp;
 
-			checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[0][thr_id] = tmp;
-			checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[1][thr_id] = tmp;
-		}
+		checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[0][thr_id] = tmp;
+		checkCudaErrors(cudaMalloc((void **) &tmp, state_size)); context_hash[1][thr_id] = tmp;
 
 		// create two CUDA streams
 		cudaStream_t tmp2;

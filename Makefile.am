@@ -25,7 +25,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  cuda_checkhash.cu \
 			  sph/sha2.c \
 			  scrypt-jane.cpp \
-			  scrypt/blake.cu scrypt/keccak.cu scrypt/sha256.cu \
+			  scrypt/keccak.cu \
 			  scrypt/salsa_kernel.cu scrypt/test_kernel.cu \
 			  scrypt/fermi_kernel.cu scrypt/kepler_kernel.cu \
 			  scrypt/nv_kernel.cu scrypt/nv_kernel2.cu scrypt/titan_kernel.cu
