@@ -143,7 +143,6 @@ static bool opt_keep_clocks = false;
 // un-linked to cmdline scrypt options (useless)
 int device_batchsize[MAX_GPUS] = { 0 };
 int device_texturecache[MAX_GPUS] = { 0 };
-int device_singlememory[MAX_GPUS] = { 0 };
 // implemented scrypt options
 int parallel = 2; // All should be made on GPU
 char *device_config[MAX_GPUS] = { 0 };
@@ -3309,7 +3308,6 @@ int main(int argc, char *argv[])
 		device_batchsize[i] = 4194304;
 		device_interactive[i] = -1;
 		device_texturecache[i] = -1;
-		device_singlememory[i] = -1;
 		device_pstate[i] = -1;
 		device_led[i] = -1;
 	}
