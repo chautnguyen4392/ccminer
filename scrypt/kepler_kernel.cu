@@ -710,7 +710,7 @@ void KeplerKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 }
 
 bool KeplerKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream,
-	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark, int texture_cache)
+	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
 	bool success = true;
 
@@ -759,29 +759,13 @@ bool KeplerKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int 
 	{
 		if (LOOKUP_GAP == 1) {
 
-			if (texture_cache == 0) {
-				if (IS_SCRYPT())      kepler_scrypt_core_kernelB<A_SCRYPT     ,ANDERSEN, 0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-				if (IS_SCRYPT_JANE()) kepler_scrypt_core_kernelB<A_SCRYPT_JANE,SIMPLE,   0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-			} else if (texture_cache == 1) {
-				if (IS_SCRYPT())      kepler_scrypt_core_kernelB<A_SCRYPT     ,ANDERSEN,1><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-				if (IS_SCRYPT_JANE()) kepler_scrypt_core_kernelB<A_SCRYPT_JANE,SIMPLE,  1><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-			} else if (texture_cache == 2) {
-				if (IS_SCRYPT())      kepler_scrypt_core_kernelB<A_SCRYPT     ,ANDERSEN,2><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-				if (IS_SCRYPT_JANE()) kepler_scrypt_core_kernelB<A_SCRYPT_JANE,SIMPLE,  2><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-			}
+			if (IS_SCRYPT())      kepler_scrypt_core_kernelB<A_SCRYPT     ,ANDERSEN, 0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
+			if (IS_SCRYPT_JANE()) kepler_scrypt_core_kernelB<A_SCRYPT_JANE,SIMPLE,   0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
 
 		} else {
 
-			if (texture_cache == 0) {
-				if (IS_SCRYPT())       kepler_scrypt_core_kernelB_LG<A_SCRYPT     ,ANDERSEN,0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-				if (IS_SCRYPT_JANE())  kepler_scrypt_core_kernelB_LG<A_SCRYPT_JANE,SIMPLE,  0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			} else if (texture_cache == 1) {
-				if (IS_SCRYPT())       kepler_scrypt_core_kernelB_LG<A_SCRYPT     ,ANDERSEN,1><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-				if (IS_SCRYPT_JANE())  kepler_scrypt_core_kernelB_LG<A_SCRYPT_JANE,SIMPLE,  1><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			} else if (texture_cache == 2) {
-				if (IS_SCRYPT())       kepler_scrypt_core_kernelB_LG<A_SCRYPT     ,ANDERSEN,2><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-				if (IS_SCRYPT_JANE())  kepler_scrypt_core_kernelB_LG<A_SCRYPT_JANE,SIMPLE,  2><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			}
+			if (IS_SCRYPT())       kepler_scrypt_core_kernelB_LG<A_SCRYPT     ,ANDERSEN,0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			if (IS_SCRYPT_JANE())  kepler_scrypt_core_kernelB_LG<A_SCRYPT_JANE,SIMPLE,  0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 
 		pos += batch;

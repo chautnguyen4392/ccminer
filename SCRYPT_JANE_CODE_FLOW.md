@@ -55,7 +55,6 @@ for (i = 0; i < MAX_GPUS; i++) {
     device_lookup_gap[i] = 1;
     device_batchsize[i] = 1024;
     device_interactive[i] = -1;
-    device_texturecache[i] = -1;
     device_singlememory[i] = -1;
     device_pstate[i] = -1;
     device_led[i] = -1;
