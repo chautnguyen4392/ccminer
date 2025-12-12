@@ -38,10 +38,8 @@
 static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm( "mov.u32 %0, %%laneid;" : "=r"( laneId ) ); return laneId; }
 
 // forward references
-__global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end);
-__global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end);
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP);
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP);
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP);
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP);
 
 // scratchbuf constants (pointers to scratch buffer for each work unit)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
@@ -80,30 +78,10 @@ bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr
 	}
 
 	// First phase: Sequential writes to scratchpad.
-	const int batch = device_batchsize[thr_id];
-	unsigned int pos = 0;
-
-	do
-	{
-		if (LOOKUP_GAP == 1) {
-			nv2_scrypt_core_kernelA<<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
-		} else {
-			nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
-		}
-		pos += batch;
-	} while (pos < N);
+	nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP);
 
 	// Second phase: Random read access from scratchpad.
-	pos = 0;
-	do
-	{
-		if (LOOKUP_GAP == 1) {
-			nv2_scrypt_core_kernelB<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-		} else {
-			nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-		}
-		pos += batch;
-	} while (pos < N);
+	nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP);
 
 	return true;
 }
@@ -368,92 +346,35 @@ static __device__ void xor_chacha8(uint4 *B, uint4 *C)
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-__global__ void nv2_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end)
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_idata += 32 * offset;
 	uint32_t * V = c_V[offset / warpSize];
 	uint4 B[4], C[4];
-	int i = begin;
 
-	if(i == 0) {
-		__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
-		__transposed_write_BC(B, C, (uint4*)V, c_N);
-		++i;
-	} else
-		__transposed_read_BC((uint4*)(V + (i-1)*32), B, C, c_N, 0);
+	__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
+	__transposed_write_BC(B, C, (uint4*)V, c_spacing);
 
-	while(i < end) {
-		xor_chacha8(B, C); xor_chacha8(C, B);
-		__transposed_write_BC(B, C, (uint4*)(V + i*32), c_N);
-		++i;
-	}
-}
-
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP)
-{
-	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
-	g_idata += 32 * offset;
-	uint32_t * V = c_V[offset / warpSize];
-	uint4 B[4], C[4];
-	int i = begin;
-
-	if(i == 0) {
-		__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
-		__transposed_write_BC(B, C, (uint4*)V, c_spacing);
-		++i;
-	} else {
-		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
-		__transposed_read_BC((uint4*)(V + pos*32), B, C, c_spacing, 0);
-		while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
-	}
-
-	while(i < end) {
+	for (int i = 1; i < iterations; i++) {
 		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
 		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), c_spacing);
-		++i;
 	}
 }
 
-__global__ void nv2_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end)
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
 	g_odata += 32 * offset;
 	uint32_t * V = c_V[offset / warpSize];
 	uint4 B[4], C[4];
 
-	if(begin == 0) {
-		__transposed_read_BC((uint4*)V, B, C, c_N, c_N_1);
-		xor_chacha8(B, C); xor_chacha8(C, B);
-	} else
-		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
+	int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
+	__transposed_read_BC((uint4*)V, B, C, c_spacing, pos);
+	while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 
-	for (int i = begin; i < end; i++)  {
-		int slot = C[0].x & c_N_1;
-		__transposed_xor_BC((uint4*)(V), B, C, c_N, slot);
-		xor_chacha8(B, C); xor_chacha8(C, B);
-	}
-
-	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);
-}
-
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP)
-{
-	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
-	g_odata += 32 * offset;
-	uint32_t * V = c_V[offset / warpSize];
-	uint4 B[4], C[4];
-
-	if(begin == 0) {
-	  int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
-	  __transposed_read_BC((uint4*)V, B, C, c_spacing, pos);
-	  while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
-	} else {
-		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
-	}
-
-	for (int i = begin; i < end; i++)  {
+	for (int i = 0; i < iterations; i++)  {
 		int slot = C[0].x & c_N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
 		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, c_spacing, pos);
