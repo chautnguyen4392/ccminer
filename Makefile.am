@@ -92,6 +92,9 @@ scrypt/kepler_kernel.o: scrypt/kepler_kernel.cu
 scrypt/nv_kernel.o: scrypt/nv_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
+scrypt/nv_kernel2.o: scrypt/nv_kernel2.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=255 -o $@ -c $<
+
 scrypt/titan_kernel.o: scrypt/titan_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
