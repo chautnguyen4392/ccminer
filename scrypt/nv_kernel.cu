@@ -20,8 +20,6 @@
 
 #define THREADS_PER_WU 1  // single thread per hash
 
-#define TEXWIDTH 32768
-
 #if __CUDA_ARCH__ < 350
 	// Kepler (Compute 3.0)
 	#define __ldg(x) (*(x))
@@ -32,16 +30,12 @@ static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm(
 
 // forward references
 __global__ void nv_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end);
-template <int TEX_DIM> __global__ void nv_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end);
+__global__ void nv_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end);
 __global__ void nv_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned int LOOKUP_GAP);
-template <int TEX_DIM> __global__ void nv_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP);
+__global__ void nv_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP);
 
 // scratchbuf constants (pointers to scratch buffer for each work unit)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
-
-// using texture references for the "tex" variants of the B kernels
-texture<uint4, 1, cudaReadModeElementType> texRef1D_4_V;
-texture<uint4, 2, cudaReadModeElementType> texRef2D_4_V;
 
 // iteration count N
 __constant__ uint32_t c_N;
@@ -50,42 +44,6 @@ __constant__ uint32_t c_spacing; // (N+LOOKUP_GAP-1)/LOOKUP_GAP
 
 NVKernel::NVKernel() : KernelInterface()
 {
-}
-
-bool NVKernel::bindtexture_1D(uint32_t *d_V, size_t size)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef1D_4_V.normalized = 0;
-	texRef1D_4_V.filterMode = cudaFilterModePoint;
-	texRef1D_4_V.addressMode[0] = cudaAddressModeClamp;
-	checkCudaErrors(cudaBindTexture(NULL, &texRef1D_4_V, d_V, &channelDesc4, size));
-	return true;
-}
-
-bool NVKernel::bindtexture_2D(uint32_t *d_V, int width, int height, size_t pitch)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef2D_4_V.normalized = 0;
-	texRef2D_4_V.filterMode = cudaFilterModePoint;
-	texRef2D_4_V.addressMode[0] = cudaAddressModeClamp;
-	texRef2D_4_V.addressMode[1] = cudaAddressModeClamp;
-	// maintain texture width of TEXWIDTH (max. limit is 65000)
-	while (width > TEXWIDTH) { width /= 2; height *= 2; pitch /= 2; }
-	while (width < TEXWIDTH) { width *= 2; height = (height+1)/2; pitch *= 2; }
-	checkCudaErrors(cudaBindTexture2D(NULL, &texRef2D_4_V, d_V, &channelDesc4, width, height, pitch));
-	return true;
-}
-
-bool NVKernel::unbindtexture_1D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef1D_4_V));
-	return true;
-}
-
-bool NVKernel::unbindtexture_2D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef2D_4_V));
-	return true;
 }
 
 void NVKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
@@ -132,9 +90,9 @@ bool NVKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_
 	do
 	{
 		if (LOOKUP_GAP == 1) {
-			nv_scrypt_core_kernelB<0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
+			nv_scrypt_core_kernelB<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
 		} else {
-			nv_scrypt_core_kernelB_LG<0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			nv_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 
 		pos += batch;
@@ -237,7 +195,7 @@ __device__ __forceinline__ void __transposed_write_BC(uint4 (&B)[4], uint4 (&C)[
 	D[spacing*2*(32*tile+28)+(lane8+1)%8] = T2[0];
 }
 
-template <int TEX_DIM> __device__ __forceinline__ void __transposed_read_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
+__device__ __forceinline__ void __transposed_read_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
 {
 	unsigned int laneId = __laneId();
 
@@ -251,21 +209,21 @@ template <int TEX_DIM> __device__ __forceinline__ void __transposed_read_BC(cons
 	uint4 T1[8], T2[8];
 	const uint4 *loc;
 	loc = &S[(spacing*2*(32*tile   ) +  lane8      + 8*__shfl(row, 0, 8))];
-	T1[7] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[7] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+4 ) + (lane8+7)%8 + 8*__shfl(row, 1, 8))];
-	T1[6] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[6] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+8 ) + (lane8+6)%8 + 8*__shfl(row, 2, 8))];
-	T1[5] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[5] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+12) + (lane8+5)%8 + 8*__shfl(row, 3, 8))];
-	T1[4] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[4] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+16) + (lane8+4)%8 + 8*__shfl(row, 4, 8))];
-	T1[3] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[3] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+20) + (lane8+3)%8 + 8*__shfl(row, 5, 8))];
-	T1[2] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[2] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+24) + (lane8+2)%8 + 8*__shfl(row, 6, 8))];
-	T1[1] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[1] = __ldg(loc);
 	loc = &S[(spacing*2*(32*tile+28) + (lane8+1)%8 + 8*__shfl(row, 7, 8))];
-	T1[0] = TEX_DIM==0 ? __ldg(loc) : TEX_DIM==1 ? tex1Dfetch(texRef1D_4_V, loc-(uint4*)c_V[0]) : tex2D(texRef2D_4_V, 0.5f + ((loc-(uint4*)c_V[0])%TEXWIDTH), 0.5f + ((loc-(uint4*)c_V[0])/TEXWIDTH));
+	T1[0] = __ldg(loc);
 
 	// rotate columns down using a barrel shifter simulation
 	// column X is rotated down by (X+1) items, or up by (8-(X+1)) = (7-X) items
@@ -288,10 +246,10 @@ template <int TEX_DIM> __device__ __forceinline__ void __transposed_read_BC(cons
 
 }
 
-template <int TEX_DIM> __device__ __forceinline__ void __transposed_xor_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
+__device__ __forceinline__ void __transposed_xor_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
 {
 	uint4 BT[4], CT[4];
-	__transposed_read_BC<TEX_DIM>(S, BT, CT, spacing, row);
+	__transposed_read_BC(S, BT, CT, spacing, row);
 
 #pragma unroll 4
 	for(int n = 0; n < 4; n++)
@@ -481,28 +439,6 @@ static __device__ void xor_chacha8(uint4 *B, uint4 *C)
 
 #endif
 
-
-#define ROTL7(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 7); a1^=ROTL(a10, 7); a2^=ROTL(a20, 7); a3^=ROTL(a30, 7);\
-};\
-
-#define ROTL9(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 9); a1^=ROTL(a10, 9); a2^=ROTL(a20, 9); a3^=ROTL(a30, 9);\
-};\
-
-#define ROTL13(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 13); a1^=ROTL(a10, 13); a2^=ROTL(a20, 13); a3^=ROTL(a30, 13);\
-};\
-
-#define ROTL18(a0,a1,a2,a3,a00,a10,a20,a30){\
-a0^=ROTL(a00, 18); a1^=ROTL(a10, 18); a2^=ROTL(a20, 18); a3^=ROTL(a30, 18);\
-};\
-
-static __device__ void block_mixer(uint4 *B, uint4 *C)
-{
-	xor_chacha8(B, C);
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 //! Experimental Scrypt core kernel for Kepler devices.
 //! @param g_idata  input data in global memory
@@ -518,14 +454,14 @@ void nv_scrypt_core_kernelA(uint32_t *g_idata, int begin, int end)
 	int i = begin;
 
 	if(i == 0) {
-		__transposed_read_BC<0>((uint4*)g_idata, B, C, 1, 0);
+		__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
 		__transposed_write_BC(B, C, (uint4*)V, c_N);
 		++i;
 	} else
-		__transposed_read_BC<0>((uint4*)(V + (i-1)*32), B, C, c_N, 0);
+		__transposed_read_BC((uint4*)(V + (i-1)*32), B, C, c_N, 0);
 
 	while(i < end) {
-		block_mixer(B, C); block_mixer(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 		__transposed_write_BC(B, C, (uint4*)(V + i*32), c_N);
 		++i;
 	}
@@ -541,24 +477,24 @@ void nv_scrypt_core_kernelA_LG(uint32_t *g_idata, int begin, int end, unsigned i
 	int i = begin;
 
 	if(i == 0) {
-		__transposed_read_BC<0>((uint4*)g_idata, B, C, 1, 0);
+		__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
 		__transposed_write_BC(B, C, (uint4*)V, c_spacing);
 		++i;
 	} else {
 		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
-		__transposed_read_BC<0>((uint4*)(V + pos*32), B, C, c_spacing, 0);
-		while(loop--) { block_mixer(B, C); block_mixer(C, B); }
+		__transposed_read_BC((uint4*)(V + pos*32), B, C, c_spacing, 0);
+		while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 	}
 
 	while(i < end) {
-		block_mixer(B, C); block_mixer(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
 		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), c_spacing);
 		++i;
 	}
 }
 
-template <int TEX_DIM>__global__
+__global__
 void nv_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
@@ -567,21 +503,21 @@ void nv_scrypt_core_kernelB(uint32_t *g_odata, int begin, int end)
 	uint4 B[4], C[4];
 
 	if(begin == 0) {
-		__transposed_read_BC<TEX_DIM>((uint4*)V, B, C, c_N, c_N_1);
-		block_mixer(B, C); block_mixer(C, B);
+		__transposed_read_BC((uint4*)V, B, C, c_N, c_N_1);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	} else
-		__transposed_read_BC<0>((uint4*)g_odata, B, C, 1, 0);
+		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
 
 	for (int i = begin; i < end; i++)  {
 		int slot = C[0].x & c_N_1;
-		__transposed_xor_BC<TEX_DIM>((uint4*)(V), B, C, c_N, slot);
-		block_mixer(B, C); block_mixer(C, B);
+		__transposed_xor_BC((uint4*)(V), B, C, c_N, slot);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);
 }
 
-template <int TEX_DIM> __global__
+__global__
 void nv_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
@@ -591,20 +527,20 @@ void nv_scrypt_core_kernelB_LG(uint32_t *g_odata, int begin, int end, unsigned i
 
 	if(begin == 0) {
 	  int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
-	  __transposed_read_BC<TEX_DIM>((uint4*)V, B, C, c_spacing, pos);
-	  while(loop--) { block_mixer(B, C); block_mixer(C, B); }
+	  __transposed_read_BC((uint4*)V, B, C, c_spacing, pos);
+	  while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 	} else {
-		__transposed_read_BC<TEX_DIM>((uint4*)g_odata, B, C, 1, 0);
+		__transposed_read_BC((uint4*)g_odata, B, C, 1, 0);
 	}
 
 	for (int i = begin; i < end; i++)  {
 		int slot = C[0].x & c_N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
-		uint4 b[4], c[4]; __transposed_read_BC<TEX_DIM>((uint4*)(V), b, c, c_spacing, pos);
-		while(loop--) { block_mixer(b, c); block_mixer(c, b); }
+		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, c_spacing, pos);
+		while(loop--) { xor_chacha8(b, c); xor_chacha8(c, b); }
 #pragma unroll 4
 		for(int n = 0; n < 4; n++) { B[n] ^= b[n]; C[n] ^= c[n]; }
-		block_mixer(B, C); block_mixer(C, B);
+		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
 	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);

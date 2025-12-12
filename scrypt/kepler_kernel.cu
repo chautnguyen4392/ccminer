@@ -17,7 +17,6 @@
 #include "salsa_kernel.h"
 #include "kepler_kernel.h"
 
-#define TEXWIDTH 32768
 #define THREADS_PER_WU 4  // four threads per hash
 
 #if CUDA_VERSION >= 9000 && __CUDA_ARCH__ >= 300
@@ -42,10 +41,6 @@ __constant__ uint32_t c_N_1;                   // N-1
 __constant__ uint32_t c_SCRATCH;
 __constant__ uint32_t c_SCRATCH_WU_PER_WARP;   // (SCRATCH * WU_PER_WARP)
 __constant__ uint32_t c_SCRATCH_WU_PER_WARP_1; // (SCRATCH * WU_PER_WARP) - 1
-
-// using texture references for the "tex" variants of the B kernels
-texture<uint4, 1, cudaReadModeElementType> texRef1D_4_V;
-texture<uint4, 2, cudaReadModeElementType> texRef2D_4_V;
 
 __device__  __forceinline__ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3);
 
@@ -116,35 +111,21 @@ void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 	}
 }
 
-template <MemoryAccess SCHEME, int TEX_DIM> __device__  __forceinline__
+template <MemoryAccess SCHEME> __device__  __forceinline__
 void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
-	uint32_t *scratch;
+	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
 
-	if (TEX_DIM == 0) scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
 	if (SCHEME == ANDERSEN) {
 		int t2_start = __shfl2((int)start, (threadIdx.x + 4)%32) + 4;
-		if (TEX_DIM > 0) { start /= 4; t2_start /= 4; }
 		bool c = (threadIdx.x & 0x4);
-		if (TEX_DIM == 0) {
-				b  = *((uint4 *)(&scratch[c ? t2_start : start]));
-				bx = *((uint4 *)(&scratch[c ? start : t2_start]));
-		} else if (TEX_DIM == 1) {
-				b  = tex1Dfetch(texRef1D_4_V, c ? t2_start : start);
-				bx = tex1Dfetch(texRef1D_4_V, c ? start : t2_start);
-		} else if (TEX_DIM == 2) {
-				b  = tex2D(texRef2D_4_V, 0.5f + ((c ? t2_start : start)%TEXWIDTH), 0.5f + ((c ? t2_start : start)/TEXWIDTH));
-				bx = tex2D(texRef2D_4_V, 0.5f + ((c ? start : t2_start)%TEXWIDTH), 0.5f + ((c ? start : t2_start)/TEXWIDTH));
-		}
+		b  = *((uint4 *)(&scratch[c ? t2_start : start]));
+		bx = *((uint4 *)(&scratch[c ? start : t2_start]));
 		uint4 tmp = b; b = (c ? bx : b); bx = (c ? tmp : bx);
 		bx = shfl4(bx, (threadIdx.x + 28)%32);
 	} else {
-				 if (TEX_DIM == 0) b = *((uint4 *)(&scratch[start]));
-		else if (TEX_DIM == 1) b = tex1Dfetch(texRef1D_4_V, start/4);
-		else if (TEX_DIM == 2) b = tex2D(texRef2D_4_V, 0.5f + ((start/4)%TEXWIDTH), 0.5f + ((start/4)/TEXWIDTH));
-				 if (TEX_DIM == 0) bx = *((uint4 *)(&scratch[start+16]));
-		else if (TEX_DIM == 1) bx = tex1Dfetch(texRef1D_4_V, (start+16)/4);
-		else if (TEX_DIM == 2) bx = tex2D(texRef2D_4_V, 0.5f + (((start+16)/4)%TEXWIDTH), 0.5f + (((start+16)/4)/TEXWIDTH));
+		b = *((uint4 *)(&scratch[start]));
+		bx = *((uint4 *)(&scratch[start+16]));
 	}
 }
 
@@ -412,7 +393,7 @@ void kepler_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 		load_key(d_idata, b, bx);
 		write_keys_direct<SCHEME>(b, bx, start);
 		++i;
-	} else read_keys_direct<SCHEME,0>(b, bx, start+32*(i-1));
+	} else read_keys_direct<SCHEME>(b, bx, start+32*(i-1));
 
 	while (i < end) {
 		block_mixer(b, bx, x1, x2, x3);
@@ -441,7 +422,7 @@ void kepler_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, 
 		++i;
 	} else {
 		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
-		read_keys_direct<SCHEME,0>(b, bx, start+32*pos);
+		read_keys_direct<SCHEME>(b, bx, start+32*pos);
 		while(loop--) block_mixer(b, bx, x1, x2, x3);
 	}
 
@@ -460,27 +441,27 @@ void kepler_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, 
  * the scratch buffer in pseudorandom order, mixing the key as it goes.
  */
 
-template <MemoryAccess SCHEME, int TEX_DIM> __global__
+template <MemoryAccess SCHEME> __global__
 void kepler_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 {
 	uint4 b, bx;
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
 	int start = (scrypt_block*c_SCRATCH) + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4);
-	if (TEX_DIM == 0) start %= c_SCRATCH_WU_PER_WARP;
+	start %= c_SCRATCH_WU_PER_WARP;
 
 	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
 	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
 	if (begin == 0) {
-		read_keys_direct<SCHEME, TEX_DIM>(b, bx, start+32*c_N_1);
+		read_keys_direct<SCHEME>(b, bx, start+32*c_N_1);
 		block_mixer(b, bx, x1, x2, x3);
 	} else load_key(d_odata, b, bx);
 
 	for (int i = begin; i < end; i++) {
 		int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-		uint4 t, tx; read_keys_direct<SCHEME, TEX_DIM>(t, tx, start+32*j);
+		uint4 t, tx; read_keys_direct<SCHEME>(t, tx, start+32*j);
 		b ^= t; bx ^= tx;
 		block_mixer(b, bx, x1, x2, x3);
 	}
@@ -488,14 +469,14 @@ void kepler_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 	store_key(d_odata, b, bx);
 }
 
-template <MemoryAccess SCHEME, int TEX_DIM> __global__
+template <MemoryAccess SCHEME> __global__
 void kepler_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
 	int start = (scrypt_block*c_SCRATCH) + (SCHEME==ANDERSEN?8:4)*(threadIdx.x%4);
-	if (TEX_DIM == 0) start %= c_SCRATCH_WU_PER_WARP;
+	start %= c_SCRATCH_WU_PER_WARP;
 
 	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
 	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
@@ -503,7 +484,7 @@ void kepler_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsign
 
 	if (begin == 0) {
 		int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
-		read_keys_direct<SCHEME,TEX_DIM>(b, bx, start+32*pos);
+		read_keys_direct<SCHEME>(b, bx, start+32*pos);
 		while(loop--) block_mixer(b, bx, x1, x2, x3);
 	} else load_key(d_odata, b, bx);
 
@@ -522,7 +503,7 @@ void kepler_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsign
 				j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
 				pos = j/LOOKUP_GAP;
 				loop = j-pos*LOOKUP_GAP;
-				read_keys_direct<SCHEME,TEX_DIM>(t, tx, start+32*pos);
+				read_keys_direct<SCHEME>(t, tx, start+32*pos);
 			}
 			if (loop==0) {
 				b ^= t; bx ^= tx;
@@ -543,7 +524,7 @@ void kepler_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsign
 		for (int i = begin; i < end; i++) {
 			int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
 			int pos = j/LOOKUP_GAP, loop = j-pos*LOOKUP_GAP;
-			uint4 t, tx; read_keys_direct<SCHEME,TEX_DIM>(t, tx, start+32*pos);
+			uint4 t, tx; read_keys_direct<SCHEME>(t, tx, start+32*pos);
 			while(loop--) block_mixer(t, tx, x1, x2, x3);
 			b ^= t; bx ^= tx;
 			block_mixer(b, bx, x1, x2, x3);
@@ -555,42 +536,6 @@ void kepler_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsign
 
 KeplerKernel::KeplerKernel() : KernelInterface()
 {
-}
-
-bool KeplerKernel::bindtexture_1D(uint32_t *d_V, size_t size)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef1D_4_V.normalized = 0;
-	texRef1D_4_V.filterMode = cudaFilterModePoint;
-	texRef1D_4_V.addressMode[0] = cudaAddressModeClamp;
-	checkCudaErrors(cudaBindTexture(NULL, &texRef1D_4_V, d_V, &channelDesc4, size));
-	return true;
-}
-
-bool KeplerKernel::bindtexture_2D(uint32_t *d_V, int width, int height, size_t pitch)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef2D_4_V.normalized = 0;
-	texRef2D_4_V.filterMode = cudaFilterModePoint;
-	texRef2D_4_V.addressMode[0] = cudaAddressModeClamp;
-	texRef2D_4_V.addressMode[1] = cudaAddressModeClamp;
-	// maintain texture width of TEXWIDTH (max. limit is 65000)
-	while (width > TEXWIDTH) { width /= 2; height *= 2; pitch /= 2; }
-	while (width < TEXWIDTH) { width *= 2; height = (height+1)/2; pitch *= 2; }
-	checkCudaErrors(cudaBindTexture2D(NULL, &texRef2D_4_V, d_V, &channelDesc4, width, height, pitch));
-	return true;
-}
-
-bool KeplerKernel::unbindtexture_1D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef1D_4_V));
-	return true;
-}
-
-bool KeplerKernel::unbindtexture_2D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef2D_4_V));
-	return true;
 }
 
 void KeplerKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
@@ -645,9 +590,9 @@ bool KeplerKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int 
 	do
 	{
 		if (LOOKUP_GAP == 1) {
-			kepler_scrypt_core_kernelB<SIMPLE, 0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
+			kepler_scrypt_core_kernelB<SIMPLE><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
 		} else {
-			kepler_scrypt_core_kernelB_LG<SIMPLE, 0><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			kepler_scrypt_core_kernelB_LG<SIMPLE><<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 
 		pos += batch;
