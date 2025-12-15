@@ -725,7 +725,11 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 			break;
 		}
 
-		// Check results from current iteration immediately
+		// Check all results from current iteration
+		int solutions_found = 0;
+		uint32_t first_valid_nonce = 0;
+		uint32_t _ALIGN(64) first_valid_hash[8];
+		
 		for (int i=0; i<throughput; i++)
 		{
 			if (hash[8*i+7] <= Htarg && fulltest(&hash[8*i], ptarget))
@@ -750,28 +754,39 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 				if (memcmp(thash, &hash[8*i], 32) == 0)
 				{
 					applog(LOG_NOTICE,
-							"TACA => scanhash_scrypt_jane[%d], FOUND a solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
+							"TACA => scanhash_scrypt_jane[%d], VALIDATED solution at i = %d with nonce = %u, hash_cpu_str = %s, hash_gpu_str = %s",
 							thr_id, i, tmp_nonce, hash_cpu_str, hash_gpu_str);
-					free(hash_cpu_str);
-					free(hash_gpu_str);
-					work_set_target_ratio(work, thash);
-					*hashes_done = n - pdata[(block_header_size / 4 - 1)];
-					pdata[(block_header_size / 4 - 1)] = tmp_nonce;
-					scrypt_free(&Vbuf);
-					scrypt_free(&Ybuf);
-					scrypt_free(&Xbuf);
-					delete[] data;
-					gettimeofday(tv_end, NULL);
-					return 1;
+					
+					// Save first valid solution
+					if (solutions_found == 0) {
+						first_valid_nonce = tmp_nonce;
+						memcpy(first_valid_hash, thash, 32);
+					}
+					solutions_found++;
 				} else {
-					free(hash_cpu_str);
-					free(hash_gpu_str);
 					applog(LOG_ERR,
-							"TACA => scanhash_scrypt_jane[%d], result does not validate on CPU",
-							thr_id);
+							"TACA => scanhash_scrypt_jane[%d], result does not validate on CPU (i=%d)",
+							thr_id, i);
 					gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d)", i);
 				}
+				free(hash_cpu_str);
+				free(hash_gpu_str);
 			}
+		}
+		
+		// After checking all results, return if we found any valid solutions
+		if (solutions_found > 0) {
+			applog(LOG_NOTICE, "TACA => scanhash_scrypt_jane[%d], Total solutions found: %d, submitting first valid nonce = %u",
+					thr_id, solutions_found, first_valid_nonce);
+			work_set_target_ratio(work, first_valid_hash);
+			*hashes_done = n - pdata[(block_header_size / 4 - 1)];
+			pdata[(block_header_size / 4 - 1)] = first_valid_nonce;
+			scrypt_free(&Vbuf);
+			scrypt_free(&Ybuf);
+			scrypt_free(&Xbuf);
+			delete[] data;
+			gettimeofday(tv_end, NULL);
+			return 1;
 		}
 
 		++iteration;
