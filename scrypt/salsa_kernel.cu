@@ -331,7 +331,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	unsigned int N = (1 << (opt_nfactor+1));
 	double szPerWarp = (double)(SCRATCH * WU_PER_WARP * sizeof(uint32_t));
 	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
-	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp.", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0));
+	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp (size=%d).", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0), THREADS_PER_WARP);
 
 	uint32_t *d_V = NULL;
 	// Determine MAXWARPS based on remaining available GPU memory and szPerWarp (reserve 50 MB)
@@ -512,6 +512,7 @@ void cuda_scrypt_core(int thr_id, int stream, unsigned int N)
 	unsigned int LOOKUP_GAP = device_lookup_gap[thr_id];
 
 	// setup execution parameters
+	// Use WU_PER_BLOCK for configurable warp size (8, 16, 24, or 32)
 	dim3 grid(WU_PER_LAUNCH/WU_PER_BLOCK, 1, 1);
 	dim3 threads(THREADS_PER_WU*WU_PER_BLOCK, 1, 1);
 

@@ -24,6 +24,10 @@ public:
 
 	virtual cudaSharedMemConfig shared_mem_config() { return cudaSharedMemBankSizeFourByte; }
 	virtual cudaFuncCache cache_config() { return cudaFuncCachePreferL1; }
+
+	// Returns the configured warp size (8, 16, 24, or 32)
+	// Set via -DTHREADS_PER_WARP=N at compile time
+	virtual int get_threads_per_warp() { return THREADS_PER_WARP; }
 };
 
 #endif // #ifndef NV2_KERNEL_H
