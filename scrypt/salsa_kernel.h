@@ -75,13 +75,18 @@ public:
 #endif // #ifdef __NVCC__
 
 // Define work unit size
-#define THREADS_PER_WARP 32
+// threads per warp for tunable granularity (can be 8, 16, 24, or 32)
+// This allows tuning the work unit granularity for certain kernels (e.g., NV2Kernel, TitanKernel)
+// Set via -DTHREADS_PER_WARP=N at compile time, defaults to 16
+#ifndef THREADS_PER_WARP
+#define THREADS_PER_WARP 16
+#endif
 #define TOTAL_WARP_LIMIT 4096
 #define WU_PER_WARP (THREADS_PER_WARP / THREADS_PER_WU)
 #define WU_PER_BLOCK (WU_PER_WARP*WARPS_PER_BLOCK)
 #define WU_PER_LAUNCH (GRID_BLOCKS*WU_PER_BLOCK)
 
-// make scratchpad size dependent on N and LOOKUP_GAP
+// make scratchpad size dependent on N, LOOKUP_GAP
 #define SCRATCH   (((N+LOOKUP_GAP-1)/LOOKUP_GAP)*32)
 
 #endif // #ifndef SALSA_KERNEL_H
