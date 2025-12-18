@@ -26,9 +26,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  sph/sha2.c \
 			  scrypt-jane.cpp \
 			  scrypt/keccak.cu \
-			  scrypt/salsa_kernel.cu scrypt/test_kernel.cu \
-			  scrypt/fermi_kernel.cu scrypt/kepler_kernel.cu \
-			  scrypt/nv_kernel.cu scrypt/nv_kernel2.cu scrypt/titan_kernel.cu
+			  scrypt/salsa_kernel.cu \
+			  scrypt/volta_kernel.cu scrypt/pascal_kernel.cu
 
 if HAVE_NVML
 nvml_defs = -DUSE_WRAPNVML
@@ -80,22 +79,10 @@ nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 scrypt/salsa_kernel.o: scrypt/salsa_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
-scrypt/test_kernel.o: scrypt/test_kernel.cu
-	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
-
-scrypt/fermi_kernel.o: scrypt/fermi_kernel.cu
-	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
-
-scrypt/kepler_kernel.o: scrypt/kepler_kernel.cu
-	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
-
-scrypt/nv_kernel.o: scrypt/nv_kernel.cu
-	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
-
-scrypt/nv_kernel2.o: scrypt/nv_kernel2.cu
+scrypt/volta_kernel.o: scrypt/volta_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=255 -o $@ -c $<
 
-scrypt/titan_kernel.o: scrypt/titan_kernel.cu
+scrypt/pascal_kernel.o: scrypt/pascal_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
 # Custom target to clean only scrypt-related object files for faster rebuilds

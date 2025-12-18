@@ -16,7 +16,7 @@
 #include "miner.h"
 
 #include "salsa_kernel.h"
-#include "nv_kernel2.h"
+#include "volta_kernel.h"
 
 #define THREADS_PER_WU 1  // single thread per hash
 
@@ -58,34 +58,34 @@ static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm(
 static __device__ __inline__ unsigned int __vLaneId() { return threadIdx.x % THREADS_PER_WARP; }
 
 // forward references - N_1 and spacing passed as register parameters for better performance
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
+__global__ void volta_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
+__global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
 
 // scratchbuf constants (pointers to scratch buffer for each work unit)
 // Note: c_V stays in constant memory because it's an array of pointers that varies per virtual warp
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
 
 
-NV2Kernel::NV2Kernel() : KernelInterface()
+VoltaKernel::VoltaKernel() : KernelInterface()
 {
 }
 
-void NV2Kernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
+void VoltaKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 {
 	checkCudaErrors(cudaMemcpyToSymbol(c_V, h_V, MAXWARPS*sizeof(uint32_t*), 0, cudaMemcpyHostToDevice));
 }
 
-bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
+bool VoltaKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
 	// Compute N_1 and spacing as register parameters (faster than constant memory)
 	uint32_t N_1 = N - 1;
 	uint32_t spacing = (N + LOOKUP_GAP - 1) / LOOKUP_GAP;
 
 	// First phase: Sequential writes to scratchpad.
-	nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
+	volta_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
 
 	// Second phase: Random read access from scratchpad.
-	nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
+	volta_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
 
 	return true;
 }
@@ -313,14 +313,14 @@ static __device__ __forceinline__ void xor_chacha8(uint4 *B, uint4 *C)
 
 
 ////////////////////////////////////////////////////////////////////////////////
-//! Experimental Scrypt-Jane core kernel for Titan devices.
+//! Experimental Scrypt-Jane core kernel for Volta devices.
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
 //! 
 //! Modified to support configurable threads per warp (8, 16, 24, 32)
 //! Use THREADS_PER_WARP to tune the granularity of work units.
 ////////////////////////////////////////////////////////////////////////////////
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
+__global__ void volta_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
@@ -343,7 +343,7 @@ __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, un
 	}
 }
 
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
+__global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
