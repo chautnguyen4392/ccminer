@@ -17,6 +17,7 @@ extern short device_map[MAX_GPUS];
 extern int device_batchsize[MAX_GPUS]; // cudaminer -b
 extern int device_interactive[MAX_GPUS]; // cudaminer -i
 extern int device_lookup_gap[MAX_GPUS]; // -L
+extern int device_threads_per_warp[MAX_GPUS]; // --threads-per-warp
 extern int device_backoff[MAX_GPUS]; // WIN32/LINUX var
 extern char *device_config[MAX_GPUS]; // -l
 extern char *device_name[MAX_GPUS];
@@ -74,17 +75,7 @@ public:
 
 #endif // #ifdef __NVCC__
 
-// Define work unit size
-// threads per warp for tunable granularity (can be 8, 16, 24, or 32)
-// This allows tuning the work unit granularity for certain kernels (e.g., VoltaKernel, PascalKernel)
-// Set via -DTHREADS_PER_WARP=N at compile time, defaults to 16
-#ifndef THREADS_PER_WARP
-#define THREADS_PER_WARP 16
-#endif
 #define TOTAL_WARP_LIMIT 4096
-#define WU_PER_WARP (THREADS_PER_WARP / THREADS_PER_WU)
-#define WU_PER_BLOCK (WU_PER_WARP*WARPS_PER_BLOCK)
-#define WU_PER_LAUNCH (GRID_BLOCKS*WU_PER_BLOCK)
 
 // make scratchpad size dependent on N, LOOKUP_GAP
 #define SCRATCH   (((N+LOOKUP_GAP-1)/LOOKUP_GAP)*32)
