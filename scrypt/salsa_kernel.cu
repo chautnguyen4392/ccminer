@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <unistd.h> // usleep
 #include <ctype.h> // tolower
+#include <sys/sysinfo.h> // sysinfo
+#include <pthread.h> // pthread_mutex for thread safety
 #include "cuda_helper.h"
 
 #include "salsa_kernel.h"
@@ -45,7 +47,9 @@
 // some globals containing pointers to device memory (for chunked allocation)
 // [MAX_GPUS] indexes up to MAX_GPUS threads (0...MAX_GPUS-1)
 int       MAXWARPS[MAX_GPUS];
+int       MAXWARPS_RAM[MAX_GPUS];                      // Maximum warps using system RAM
 uint32_t* h_V[MAX_GPUS][TOTAL_WARP_LIMIT*64];          // NOTE: the *64 prevents buffer overflow for --keccak
+                                                       // h_V[0..MAXWARPS-1] = VRAM buffers, h_V[MAXWARPS..MAXWARPS+MAXWARPS_RAM-1] = system RAM buffers
 uint32_t  h_V_extra[MAX_GPUS][TOTAL_WARP_LIMIT*64];    //       with really large kernel launch configurations
 
 KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
@@ -127,7 +131,13 @@ int cuda_throughput(int thr_id)
 	if (context_blocks.find(thr_id) == context_blocks.end())
 	{
 		checkCudaErrors(cudaSetDevice(device_map[thr_id]));
-		checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleYield));
+		// Set device flags BEFORE creating context
+		// If using system RAM, enable host memory mapping
+		unsigned int flags = cudaDeviceScheduleYield;
+		if (opt_use_system_ram) {
+			flags |= cudaDeviceMapHost;
+		}
+		checkCudaErrors(cudaSetDeviceFlags(flags));
 
 		KernelInterface *kernel;
 		bool concurrent;
@@ -240,6 +250,129 @@ static inline int console_width() {
 	return 999;
 }
 #endif
+
+// Calculate available system RAM per GPU
+// Returns available RAM in bytes per GPU (distributed equally among all GPUs)
+// Reads from /proc/meminfo first, falls back to sysinfo if unavailable
+// Thread-safe: calculates value only once and caches it for subsequent calls
+static size_t get_available_system_ram_per_gpu(int dev_id, const char *dev_name)
+{
+	// Static variables for thread-safe caching
+	static size_t cached_ram_per_gpu = 0;
+	static bool cached_value_valid = false;
+	static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+	
+	// Try to acquire lock and check cache
+	pthread_mutex_lock(&cache_mutex);
+	
+	// If value is already cached, return it immediately
+	if (cached_value_valid) {
+		pthread_mutex_unlock(&cache_mutex);
+		return cached_ram_per_gpu;
+	}
+	
+	// Value not cached yet, calculate it now
+	unsigned long mem_available = 0;
+	unsigned long mem_total = 0;
+	unsigned long mem_free = 0;
+	FILE *f;
+	char line[256];
+	
+	// Try reading from /proc/meminfo first
+	f = fopen("/proc/meminfo", "r");
+	if (f) {
+		while (fgets(line, sizeof(line), f)) {
+			if (sscanf(line, "MemTotal: %lu kB", &mem_total) == 1) {
+				// Convert from KB to bytes
+				mem_total *= 1024;
+			} else if (sscanf(line, "MemFree: %lu kB", &mem_free) == 1) {
+				// Convert from KB to bytes
+				mem_free *= 1024;
+			} else if (sscanf(line, "MemAvailable: %lu kB", &mem_available) == 1) {
+				// Convert from KB to bytes
+				mem_available *= 1024;
+			}
+		}
+		fclose(f);
+		
+		if (mem_available > 0) {
+			applog(LOG_INFO, "GPU #%d (%s): System RAM: MemTotal=%lu MB, MemFree=%lu MB, MemAvailable=%lu MB",
+			       dev_id, dev_name,
+			       (unsigned long)(mem_total / (1024 * 1024)),
+			       (unsigned long)(mem_free / (1024 * 1024)),
+			       (unsigned long)(mem_available / (1024 * 1024)));
+		} else {
+			// Fallback: use MemFree if MemAvailable not found
+			mem_available = mem_free;
+			applog(LOG_INFO, "GPU #%d (%s): System RAM: MemTotal=%lu MB, MemFree=%lu MB (MemAvailable not found, using MemFree)",
+			       dev_id, dev_name,
+			       (unsigned long)(mem_total / (1024 * 1024)),
+			       (unsigned long)(mem_free / (1024 * 1024)));
+		}
+	}
+	
+	// Fallback to sysinfo if /proc/meminfo failed or MemAvailable not found
+	if (mem_available == 0) {
+		struct sysinfo si;
+		if (sysinfo(&si) == 0) {
+			// freeram + bufferram gives available memory
+			mem_available = (unsigned long)si.freeram * si.mem_unit + (unsigned long)si.bufferram * si.mem_unit;
+			mem_total = (unsigned long)si.totalram * si.mem_unit;
+			mem_free = (unsigned long)si.freeram * si.mem_unit;
+			applog(LOG_INFO, "GPU #%d (%s): System RAM (from sysinfo): MemTotal=%lu MB, MemFree=%lu MB, Available=%lu MB",
+			       dev_id, dev_name,
+			       (unsigned long)(mem_total / (1024 * 1024)),
+			       (unsigned long)(mem_free / (1024 * 1024)),
+			       (unsigned long)(mem_available / (1024 * 1024)));
+		} else {
+			applog(LOG_ERR, "GPU #%d (%s): Failed to get system memory information", dev_id, dev_name);
+			pthread_mutex_unlock(&cache_mutex);
+			return 0;
+		}
+	}
+	
+	// Count number of enabled GPU threads (opt_n_threads)
+	// Note: opt_n_threads represents the number of enabled GPU threads
+	int num_gpus = opt_n_threads;
+	if (num_gpus <= 0) {
+		// Fallback: use cuda_num_devices() if opt_n_threads not yet initialized
+		num_gpus = cuda_num_devices();
+		if (num_gpus <= 0) {
+			applog(LOG_ERR, "GPU #%d (%s): No GPUs detected, cannot distribute system RAM", dev_id, dev_name);
+			pthread_mutex_unlock(&cache_mutex);
+			return 0;
+		}
+		applog(LOG_DEBUG, "GPU #%d (%s): opt_n_threads not yet initialized, using cuda_num_devices() count: %d", dev_id, dev_name, num_gpus);
+	}
+	
+	// Reserve system RAM if --use-system-ram is enabled and --reserve-ram > 0
+	if (opt_use_system_ram && opt_reserve_ram > 0) {
+		size_t reserve_bytes = (size_t)opt_reserve_ram * 1024ULL * 1024ULL;
+		if (mem_available > reserve_bytes) {
+			mem_available -= reserve_bytes;
+			applog(LOG_INFO, "GPU #%d (%s): Reserving %d MB system RAM, remaining system RAM: %lu MB",
+			       dev_id, dev_name, opt_reserve_ram, (unsigned long)(mem_available / (1024 * 1024)));
+		} else {
+			applog(LOG_WARNING, "GPU #%d (%s): Requested reserve (%d MB) exceeds available system RAM (%lu MB), using all available",
+			       dev_id, dev_name, opt_reserve_ram, (unsigned long)(mem_available / (1024 * 1024)));
+			mem_available = 0;
+		}
+	}
+
+	// Distribute available RAM equally among all enabled GPUs
+	size_t ram_per_gpu = (size_t)(mem_available / num_gpus);
+	applog(LOG_INFO, "GPU #%d (%s): Distributing system RAM: %zu MB per GPU (%d enabled GPU thread(s) total)",
+	       dev_id, dev_name, ram_per_gpu / (1024 * 1024), num_gpus);
+	
+	// Cache the calculated value
+	cached_ram_per_gpu = ram_per_gpu;
+	cached_value_valid = true;
+	
+	// Release lock before returning
+	pthread_mutex_unlock(&cache_mutex);
+	
+	return ram_per_gpu;
+}
 
 // Query and log GPU memory information at runtime
 static void log_gpu_memory_info(int thr_id, const char *prefix_format, ...)
@@ -406,8 +539,94 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 	MAXWARPS[thr_id] = warp;
 	applog(LOG_INFO, "GPU #%d (%s): Actual MAXWARPS: %d", dev_id, dev_name, MAXWARPS[thr_id]);
-	log_gpu_memory_info(thr_id, "After warp allocation: ");
-	kernel->set_scratchbuf_constants(MAXWARPS[thr_id], h_V[thr_id]);
+	log_gpu_memory_info(thr_id, "After VRAM warp allocation: ");
+	
+	// Initialize MAXWARPS_RAM to 0
+	MAXWARPS_RAM[thr_id] = 0;
+	
+	// Allocate additional h_V buffers in system RAM if enabled
+	// These will be stored in h_V starting at index MAXWARPS[thr_id]
+	if (opt_use_system_ram) {
+		// Check if device supports mapped host memory
+		if (!props.canMapHostMemory) {
+			applog(LOG_WARNING, "GPU #%d (%s): Device does not support mapped host memory, system RAM buffers disabled", 
+				dev_id, dev_name);
+			MAXWARPS_RAM[thr_id] = 0;
+		} else {
+			size_t available_system_ram = get_available_system_ram_per_gpu(dev_id, dev_name);
+			if (available_system_ram > 0) {
+				// Calculate MAXWARPS_RAM based on available system RAM
+				int max_warps_ram_calc = min((int)(available_system_ram / szPerWarp), TOTAL_WARP_LIMIT);
+				applog(LOG_INFO, "GPU #%d (%s): Calculated MAXWARPS_RAM: %d (%.1f MB available system RAM)",
+					dev_id, dev_name, max_warps_ram_calc, (double)available_system_ram / (1024.0 * 1024.0));
+				
+				// Allocate additional h_V buffers in system RAM using mapped pinned host memory
+				// Store them in h_V starting at index MAXWARPS[thr_id]
+				// Note: h_V will contain device pointers for mapped memory
+				int warp_ram;
+				for (warp_ram = 0; warp_ram < max_warps_ram_calc; ++warp_ram) {
+					int h_V_index = MAXWARPS[thr_id] + warp_ram;
+					h_V[thr_id][h_V_index] = NULL; // Initialize to NULL
+					
+					// Allocate mapped host memory (accessible from both host and device)
+					void *host_ptr = NULL;
+					cudaError_t err = cudaHostAlloc(&host_ptr, 
+						(SCRATCH * WU_PER_WARP) * sizeof(uint32_t), 
+						cudaHostAllocMapped);
+					if (err != cudaSuccess) {
+						applog(LOG_WARNING, "GPU #%d: Failed to allocate mapped system RAM for warp %d: %s", 
+							device_map[thr_id], warp_ram, cudaGetErrorString(err));
+						// Free any already allocated buffers
+						for (int i = 0; i < warp_ram; ++i) {
+							int idx = MAXWARPS[thr_id] + i;
+							if (h_V[thr_id][idx]) {
+								cudaFreeHost(h_V[thr_id][idx]);
+								h_V[thr_id][idx] = NULL;
+							}
+						}
+						break;
+					}
+					
+					// Get device pointer for the mapped host memory
+					uint32_t *device_ptr = NULL;
+					err = cudaHostGetDevicePointer((void **)&device_ptr, host_ptr, 0);
+					if (err != cudaSuccess) {
+						applog(LOG_WARNING, "GPU #%d: Failed to get device pointer for mapped system RAM warp %d: %s", 
+							device_map[thr_id], warp_ram, cudaGetErrorString(err));
+						cudaFreeHost(host_ptr);
+						// Free any already allocated buffers
+						for (int i = 0; i < warp_ram; ++i) {
+							int idx = MAXWARPS[thr_id] + i;
+							if (h_V[thr_id][idx]) {
+								cudaFreeHost(h_V[thr_id][idx]);
+								h_V[thr_id][idx] = NULL;
+							}
+						}
+						break;
+					}
+					
+					// Store device pointer in h_V (kernels will use this)
+					h_V[thr_id][h_V_index] = device_ptr;
+				}
+				MAXWARPS_RAM[thr_id] = warp_ram;
+				applog(LOG_INFO, "GPU #%d (%s): Actual MAXWARPS_RAM: %d", dev_id, dev_name, MAXWARPS_RAM[thr_id]);
+				
+				if (MAXWARPS_RAM[thr_id] > 0) {
+					applog(LOG_INFO, "GPU #%d (%s): Total warps (VRAM + System RAM): %d + %d = %d",
+						dev_id, dev_name, MAXWARPS[thr_id], MAXWARPS_RAM[thr_id], 
+						MAXWARPS[thr_id] + MAXWARPS_RAM[thr_id]);
+				}
+			} else {
+				applog(LOG_WARNING, "GPU #%d: Failed to get available system RAM, system RAM buffers disabled", device_map[thr_id]);
+				MAXWARPS_RAM[thr_id] = 0;
+			}
+		}
+	} else {
+		MAXWARPS_RAM[thr_id] = 0;
+	}
+	
+	// Pass total number of warps (VRAM + System RAM) to kernel
+	kernel->set_scratchbuf_constants(MAXWARPS[thr_id] + MAXWARPS_RAM[thr_id], h_V[thr_id]);
 
 	if (validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK))
 	{
@@ -435,10 +654,10 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 		// defaults, in case nothing else is chosen below
 		optimal_blocks = 4 * device_cores / WU_PER_WARP;
 
-		if (optimal_blocks > MAXWARPS[thr_id])
+		if (optimal_blocks > MAXWARPS[thr_id] + MAXWARPS_RAM[thr_id])
 		{
 			WARPS_PER_BLOCK = 1;
-			optimal_blocks = MAXWARPS[thr_id];
+			optimal_blocks = MAXWARPS[thr_id] + MAXWARPS_RAM[thr_id];
 		} else {
 			WARPS_PER_BLOCK = 2;
 			optimal_blocks = optimal_blocks / 2;
@@ -451,13 +670,6 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 
 	applog(LOG_INFO, "GPU #%d (%s): using launch configuration %c%dx%d", dev_id, dev_name, kernel->get_identifier(), optimal_blocks, WARPS_PER_BLOCK);
-
-	// back off unnecessary memory allocations to have some breathing room
-	while (MAXWARPS[thr_id] > 0 && MAXWARPS[thr_id] > optimal_blocks * WARPS_PER_BLOCK) {
-		(MAXWARPS[thr_id])--;
-		checkCudaErrors(cudaFree(h_V[thr_id][MAXWARPS[thr_id]]-h_V_extra[thr_id][MAXWARPS[thr_id]]));
-		h_V[thr_id][MAXWARPS[thr_id]] = NULL; h_V_extra[thr_id][MAXWARPS[thr_id]] = 0;
-	}
 
 	return optimal_blocks;
 }

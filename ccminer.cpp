@@ -203,6 +203,8 @@ double opt_resume_temp = 0.;
 double opt_resume_diff = 0.;
 double opt_resume_rate = -1.;
 int opt_reserve_vram = 50; // VRAM to reserve in MB (default: 50 MB)
+bool opt_use_system_ram = false; // Use system RAM for additional h_V buffers (default: disabled)
+int opt_reserve_ram = 1024; // System RAM to reserve in MB (default: 1024 MB)
 
 int opt_statsavg = 30;
 
@@ -347,7 +349,8 @@ Options:\n\
       --max-diff=N      Only mine if net difficulty is less than specified value\n\
                         Can be tuned with --resume-diff=N to set a resume value\n\
       --max-log-rate    Interval to reduce per gpu hashrate logs (default: 3)\n\
-      --reserve-vram=N  Amount of VRAM to reserve in MB (default: 50)\n"
+      --reserve-vram=N  Amount of VRAM to reserve in MB (default: 50)\n\
+      --reserve-ram=N   Amount of system RAM to reserve in MB when --use-system-ram is enabled (default: 1024)\n"
 #if defined(__linux) /* via nvml */
 "\
       --mem-clock=3505  Set the gpu memory max clock (346.72+ driver)\n\
@@ -425,6 +428,8 @@ struct option options[] = {
 	{ "resume-rate", 1, NULL, 1064 },
 	{ "resume-temp", 1, NULL, 1065 },
 	{ "reserve-vram", 1, NULL, 1066 },
+	{ "reserve-ram", 1, NULL, 1068 },
+	{ "use-system-ram", 0, NULL, 1067 },
 	{ "pass", 1, NULL, 'p' },
 	{ "pool-name", 1, NULL, 1100 },     // pool
 	{ "pool-algo", 1, NULL, 1101 },     // pool
@@ -3025,6 +3030,14 @@ void parse_arg(int key, char *arg)
 		v = atoi(arg);
 		if (v >= 0)
 			opt_reserve_vram = v;
+		break;
+	case 1067: // use-system-ram
+		opt_use_system_ram = true;
+		break;
+	case 1068: // reserve-ram
+		v = atoi(arg);
+		if (v >= 0)
+			opt_reserve_ram = v;
 		break;
 	case 'd': // --device
 		{
