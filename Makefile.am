@@ -58,12 +58,14 @@ ccminer_LDADD += -lcuda
 # Default architecture (Pascal - GTX 1060/1070/1080)
 nvcc_ARCH := -gencode=arch=compute_61,code=\"sm_61,compute_61\"
 
-# Optional: Turing (RTX 2000 series) - requires CUDA 10+
+# Turing (RTX 2000 series) - enabled by default, requires CUDA 10+
+# Use --disable-gen75 to disable
 if WANT_GEN75
 nvcc_ARCH += -gencode=arch=compute_75,code=\"sm_75,compute_75\"
 endif
 
-# Optional: Ampere (RTX 3000 series) - requires CUDA 11+
+# Ampere (RTX 3000 series) - enabled by default, requires CUDA 11+
+# Use --disable-gen86 to disable
 if WANT_GEN86
 nvcc_ARCH += -gencode=arch=compute_86,code=\"sm_86,compute_86\"
 endif
