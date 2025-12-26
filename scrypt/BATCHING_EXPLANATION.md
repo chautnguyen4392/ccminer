@@ -1,5 +1,9 @@
 # Why Batching is Used in titan_scrypt_core_kernelA_LG
 
+> **Note:** The production kernel now always starts from iteration `0` and
+> processes a full range specified by an `iterations` parameter. The material
+> below documents the legacy batching/resume approach for historical reference.
+
 ## Overview
 
 The `titan_scrypt_core_kernelA_LG` kernel processes iterations in **batches** (using `begin` and `end` parameters) instead of processing all N iterations continuously in a single kernel launch. This document explains why this design choice was made.

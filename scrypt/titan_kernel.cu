@@ -42,8 +42,6 @@ __constant__ uint32_t c_SCRATCH;
 __constant__ uint32_t c_SCRATCH_WU_PER_WARP;   // (SCRATCH * WU_PER_WARP)
 __constant__ uint32_t c_SCRATCH_WU_PER_WARP_1; // (SCRATCH * WU_PER_WARP)-1
 
-template <int ALGO> __device__  __forceinline__ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3);
-
 static __device__ uint4& operator ^= (uint4& left, const uint4& right) {
 	left.x ^= right.x;
 	left.y ^= right.y;
@@ -58,14 +56,6 @@ static __device__ uint4& operator += (uint4& left, const uint4& right) {
 	left.z += right.z;
 	left.w += right.w;
 	return left;
-}
-
-
-static __device__ uint4 shfl4(const uint4 bx, int target_thread) {
-	return make_uint4(
-		__shfl2((int)bx.x, target_thread), __shfl2((int)bx.y, target_thread),
-		__shfl2((int)bx.z, target_thread), __shfl2((int)bx.w, target_thread)
-	);
 }
 
 /* write_keys writes the 8 keys being processed by a warp to the global
@@ -107,42 +97,6 @@ void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 	// Use __ldg() for read-only cache optimization (Pascal+)
 	b = __ldg((uint4 *)(&scratch[start]));
 	bx = __ldg((uint4 *)(&scratch[start+16]));
-}
-
-__device__  __forceinline__
-void primary_order_shuffle(uint32_t b[4], uint32_t bx[4]) {
-	/* Inner loop shuffle targets */
-	int x1 = (threadIdx.x & 0xfc) + (((threadIdx.x & 3)+1)&3);
-	int x2 = (threadIdx.x & 0xfc) + (((threadIdx.x & 3)+2)&3);
-	int x3 = (threadIdx.x & 0xfc) + (((threadIdx.x & 3)+3)&3);
-
-	b[3] = __shfl2((int)b[3], x1);
-	b[2] = __shfl2((int)b[2], x2);
-	b[1] = __shfl2((int)b[1], x3);
-	uint32_t tmp = b[1]; b[1] = b[3]; b[3] = tmp;
-
-	bx[3] = __shfl2((int)bx[3], x1);
-	bx[2] = __shfl2((int)bx[2], x2);
-	bx[1] = __shfl2((int)bx[1], x3);
-	tmp = bx[1]; bx[1] = bx[3]; bx[3] = tmp;
-}
-
-__device__  __forceinline__
-void primary_order_shuffle(uint4 &b, uint4 &bx) {
-	/* Inner loop shuffle targets */
-	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 3)+1)&3);
-	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 3)+2)&3);
-	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 3)+3)&3);
-
-	b.w = __shfl2((int)b.w, x1);
-	b.z = __shfl2((int)b.z, x2);
-	b.y = __shfl2((int)b.y, x3);
-	uint32_t tmp = b.y; b.y = b.w; b.w = tmp;
-
-	bx.w = __shfl2((int)bx.w, x1);
-	bx.z = __shfl2((int)bx.z, x2);
-	bx.y = __shfl2((int)bx.y, x3);
-	tmp = bx.y; bx.y = bx.w; bx.w = tmp;
 }
 
 /*
@@ -286,14 +240,6 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 	bx += x;
 }
 
-
-__device__  __forceinline__
-void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
-{
-	chacha_xor_core(b, bx, x1, x2, x3);
-}
-
-
 /*
  * The hasher_gen_kernel operates on a group of 1024-bit input keys
  * in B, stored as:
@@ -315,7 +261,7 @@ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
  */
 
 __global__
-void titan_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
+void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
 
@@ -325,51 +271,17 @@ void titan_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
 	int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+	int i = 0;
 
-	int i = begin;
+	if (iterations <= 0)
+		return;
 
-	if (i == 0) {
-		load_key(d_idata, b, bx);
-		write_keys_direct(b, bx, start);
-		++i;
-	} else {
-		read_keys_direct(b, bx, start+32*(i-1));
-	}
+	load_key(d_idata, b, bx);
+	write_keys_direct(b, bx, start);
+	++i;
 
-	while (i < end) {
-		block_mixer(b, bx, x1, x2, x3);
-		write_keys_direct(b, bx, start+32*i);
-		++i;
-	}
-}
-
-__global__
-void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, unsigned int LOOKUP_GAP)
-{
-	uint4 b, bx;
-
-	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
-	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
-	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
-
-	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
-
-	int i = begin;
-
-	if (i == 0) {
-		load_key(d_idata, b, bx);
-		write_keys_direct(b, bx, start);
-		++i;
-	} else {
-		int pos = (i-1)/LOOKUP_GAP;
-		int loop = (i-1) - pos*LOOKUP_GAP;
-		read_keys_direct(b, bx, start+32*pos);
-		while (loop--) block_mixer(b, bx, x1, x2, x3);
-	}
-
-	while (i < end) {
-		block_mixer(b, bx, x1, x2, x3);
+	while (i < iterations) {
+		chacha_xor_core(b, bx, x1, x2, x3);
 		if (i % LOOKUP_GAP == 0)
 			write_keys_direct(b, bx, start+32*(i/LOOKUP_GAP));
 		++i;
@@ -384,7 +296,7 @@ void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, u
  */
 
 __global__
-void titan_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
+void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
 
@@ -395,66 +307,35 @@ void titan_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
 	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
 
-	if (begin == 0) {
-		read_keys_direct(b, bx, start+32*c_N_1);
-		block_mixer(b, bx, x1, x2, x3);
-	} else {
-		load_key(d_odata, b, bx);
-	}
+	if (iterations <= 0)
+		return;
 
-	for (int i = begin; i < end; i++) {
-		int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-		uint4 t, tx;
-		read_keys_direct(t, tx, start+32*j);
-		b ^= t; bx ^= tx;
-		block_mixer(b, bx, x1, x2, x3);
-	}
-
-	store_key(d_odata, b, bx);
-}
-
-__global__
-void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsigned int LOOKUP_GAP)
-{
-	uint4 b, bx;
-
-	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = ((scrypt_block*c_SCRATCH) + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
-
-	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
-	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
-	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
-
-	if (begin == 0) {
-		int pos = c_N_1/LOOKUP_GAP;
-		int loop = 1 + (c_N_1 - pos*LOOKUP_GAP);
-		read_keys_direct(b, bx, start+32*pos);
-		while (loop--)
-			block_mixer(b, bx, x1, x2, x3);
-	} else {
-		load_key(d_odata, b, bx);
-	}
+	int resume_pos = c_N_1/LOOKUP_GAP;
+	int resume_loop = 1 + (c_N_1 - resume_pos*LOOKUP_GAP);
+	read_keys_direct(b, bx, start+32*resume_pos);
+	while (resume_loop--)
+		chacha_xor_core(b, bx, x1, x2, x3);
 
 	int j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-	int pos = j/LOOKUP_GAP;
+	int scratch_pos = j/LOOKUP_GAP;
 	int loop = -1;
 	uint4 t, tx;
 
-	int i = begin;
-	while (i < end)
+	int i = 0;
+	while (i < iterations)
 	{
 		if (loop == -1) {
 			j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
-			pos = j/LOOKUP_GAP;
-			loop = j - pos*LOOKUP_GAP;
-			read_keys_direct(t, tx, start+32*pos);
+			scratch_pos = j/LOOKUP_GAP;
+			loop = j - scratch_pos*LOOKUP_GAP;
+			read_keys_direct(t, tx, start+32*scratch_pos);
 		}
 		if (loop == 0) {
 			b ^= t; bx ^= tx;
 			t = b; tx = bx;
 		}
 
-		block_mixer(t, tx, x1, x2, x3);
+		chacha_xor_core(t, tx, x1, x2, x3);
 		if (loop == 0) {
 			b = t; bx = tx;
 			i++;
@@ -502,32 +383,10 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	}
 
 	// First phase: Sequential writes to scratchpad.
-
-	int batch = device_batchsize[thr_id];
-
-	unsigned int pos = 0;
-	do {
-		if (LOOKUP_GAP == 1) {
-			titan_scrypt_core_kernelA <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N));
-		} else {
-			titan_scrypt_core_kernelA_LG <<< grid, threads, 0, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
-		}
-		pos += batch;
-
-	} while (pos < N);
+	titan_scrypt_core_kernelA_LG <<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP);
 
 	// Second phase: Random read access from scratchpad.
-
-	pos = 0;
-	do {
-		if (LOOKUP_GAP == 1)  {
-			titan_scrypt_core_kernelB <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N));
-		} else {
-			titan_scrypt_core_kernelB_LG <<< grid, threads, 0, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-		}
-		pos += batch;
-
-	} while (pos < N);
+	titan_scrypt_core_kernelB_LG <<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP);
 
 	return success;
 }
