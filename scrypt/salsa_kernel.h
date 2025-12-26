@@ -23,7 +23,6 @@ extern int device_backoff[MAX_GPUS]; // WIN32/LINUX var
 extern char *device_config[MAX_GPUS]; // -l
 extern char *device_name[MAX_GPUS];
 
-extern bool opt_autotune;
 extern int opt_nfactor;
 extern char *jane_params;
 extern int parallel;
