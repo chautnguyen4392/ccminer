@@ -34,6 +34,9 @@
 // scratchbuf constants (pointers to scratch buffer for each warp, i.e. 32 hashes)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
 
+// Shared memory copy of c_V for faster access (size is WARPS_PER_BLOCK per block)
+extern __shared__ uint32_t* s_V[];
+
 // iteration count N
 __constant__ uint32_t c_N;
 __constant__ uint32_t c_N_1;                   // N-1
@@ -108,7 +111,7 @@ void stcg_uint4(uint4* ptr, const uint4 &v)
 __device__ __forceinline__
 void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 {
-	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
+	uint32_t *scratch = s_V[threadIdx.x/32];
 	stcg_uint4((uint4 *)(&scratch[start   ]), b);
 	stcg_uint4((uint4 *)(&scratch[start+16]), bx);
 }
@@ -116,7 +119,7 @@ void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 __device__ __forceinline__
 void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
-	uint32_t *scratch = c_V[(blockIdx.x*blockDim.x + threadIdx.x)/32];
+	uint32_t *scratch = s_V[threadIdx.x/32];
 	// Use __ldg() for read-only cache optimization (Pascal+)
 	b = ldcg_uint4((uint4 *)(&scratch[start]));
 	bx = ldcg_uint4((uint4 *)(&scratch[start+16]));
@@ -286,6 +289,14 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 __global__
 void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
 {
+	// Copy from constant memory c_V to shared memory s_V for this block's warps
+	int warp_id = threadIdx.x / 32;
+	int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+	if (threadIdx.x % 32 == 0) {
+		s_V[warp_id] = c_V[global_warp_id];
+	}
+	__syncthreads();
+
 	uint4 b, bx;
 
 	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
@@ -321,6 +332,14 @@ void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsig
 __global__
 void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
 {
+	// Copy from constant memory c_V to shared memory s_V for this block's warps
+	int warp_id = threadIdx.x / 32;
+	int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+	if (threadIdx.x % 32 == 0) {
+		s_V[warp_id] = c_V[global_warp_id];
+	}
+	__syncthreads();
+
 	uint4 b, bx;
 
 	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
@@ -405,11 +424,14 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 		prev_N[thr_id] = N;
 	}
 
+	// Calculate shared memory size needed for pointer array (WARPS_PER_BLOCK pointers)
+	size_t shared_mem_size = WARPS_PER_BLOCK * sizeof(uint32_t*);
+
 	// First phase: Sequential writes to scratchpad.
-	titan_scrypt_core_kernelA_LG <<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP);
+	titan_scrypt_core_kernelA_LG <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
 
 	// Second phase: Random read access from scratchpad.
-	titan_scrypt_core_kernelB_LG <<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP);
+	titan_scrypt_core_kernelB_LG <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
 
 	return success;
 }
