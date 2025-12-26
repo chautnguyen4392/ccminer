@@ -20,6 +20,23 @@
 
 #define THREADS_PER_WU 1  // single thread per hash
 
+// THREADS_PER_WARP is defined in salsa_kernel.h (can be 8, 16, 24, or 32)
+// This allows tuning the granularity of work units
+// Set via -DTHREADS_PER_WARP=N at compile time
+
+// Validate threads per warp at compile time
+#if (THREADS_PER_WARP != 8) && (THREADS_PER_WARP != 16) && (THREADS_PER_WARP != 24) && (THREADS_PER_WARP != 32)
+#error "THREADS_PER_WARP must be 8, 16, 24, or 32"
+#endif
+
+// Number of 8-thread tiles per virtual warp
+#define TILES_PER_VWARP (THREADS_PER_WARP / 8)
+
+// Fixed tile stride for memory layout - must be 32 to avoid overlap between tiles
+// Each tile needs 8 positions (lanes) * 4 rows = 32 positions in the strided layout
+// Using THREADS_PER_WARP here would cause overlap when THREADS_PER_WARP < 32
+#define TILE_STRIDE 32
+
 // Use synchronized shuffle for CUDA 9.0+ (required for Volta/Ampere and later)
 #if CUDA_VERSION >= 9000 && __CUDA_ARCH__ >= 300
 #define SHFL(var, srcLane, width) __shfl_sync(0xFFFFFFFFu, var, srcLane, width)
@@ -34,8 +51,11 @@
 
 #if !defined(__CUDA_ARCH__) ||  __CUDA_ARCH__ >= 300
 
-// grab lane ID
+// grab hardware lane ID (0-31 within actual warp)
 static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm( "mov.u32 %0, %%laneid;" : "=r"( laneId ) ); return laneId; }
+
+// virtual lane ID within virtual warp (0 to THREADS_PER_WARP-1)
+static __device__ __inline__ unsigned int __vLaneId() { return threadIdx.x % THREADS_PER_WARP; }
 
 // forward references
 __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP);
@@ -107,10 +127,10 @@ __device__ __forceinline__ uint4 shfl4(const uint4 val, unsigned int lane, unsig
 
 __device__ __forceinline__ void __transposed_write_BC(uint4 (&B)[4], uint4 (&C)[4], uint4 *D, int spacing)
 {
-	unsigned int laneId = __laneId();
+	unsigned int vLaneId = __vLaneId();
 
-	unsigned int lane8 = laneId%8;
-	unsigned int tile  = laneId/8;
+	unsigned int lane8 = vLaneId % 8;
+	unsigned int tile  = vLaneId / 8;  // 0 to (TILES_PER_VWARP-1)
 
 	uint4 T1[8], T2[8];
 
@@ -170,44 +190,47 @@ __device__ __forceinline__ void __transposed_write_BC(uint4 (&B)[4], uint4 (&C)[
 	*/
 
 	// rotate rows again using address math and write to D, in reverse row order
-	D[spacing*2*(32*tile   )+ lane8     ] = T2[7];
-	D[spacing*2*(32*tile+4 )+(lane8+7)%8] = T2[6];
-	D[spacing*2*(32*tile+8 )+(lane8+6)%8] = T2[5];
-	D[spacing*2*(32*tile+12)+(lane8+5)%8] = T2[4];
-	D[spacing*2*(32*tile+16)+(lane8+4)%8] = T2[3];
-	D[spacing*2*(32*tile+20)+(lane8+3)%8] = T2[2];
-	D[spacing*2*(32*tile+24)+(lane8+2)%8] = T2[1];
-	D[spacing*2*(32*tile+28)+(lane8+1)%8] = T2[0];
+	// Use TILE_STRIDE (fixed 32) to avoid overlap between tiles when THREADS_PER_WARP < 32
+	// Each tile needs 32 positions: 8 lanes * 4 strided rows (offsets 0,4,8,12,16,20,24,28)
+	D[spacing*2*(TILE_STRIDE*tile   )+ lane8     ] = T2[7];
+	D[spacing*2*(TILE_STRIDE*tile+4 )+(lane8+7)%8] = T2[6];
+	D[spacing*2*(TILE_STRIDE*tile+8 )+(lane8+6)%8] = T2[5];
+	D[spacing*2*(TILE_STRIDE*tile+12)+(lane8+5)%8] = T2[4];
+	D[spacing*2*(TILE_STRIDE*tile+16)+(lane8+4)%8] = T2[3];
+	D[spacing*2*(TILE_STRIDE*tile+20)+(lane8+3)%8] = T2[2];
+	D[spacing*2*(TILE_STRIDE*tile+24)+(lane8+2)%8] = T2[1];
+	D[spacing*2*(TILE_STRIDE*tile+28)+(lane8+1)%8] = T2[0];
 }
 
 __device__ __forceinline__ void __transposed_read_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
 {
-	unsigned int laneId = __laneId();
+	unsigned int vLaneId = __vLaneId();
 
-	unsigned int lane8 = laneId%8;
-	unsigned int tile  = laneId/8;
+	unsigned int lane8 = vLaneId % 8;
+	unsigned int tile  = vLaneId / 8;  // 0 to (TILES_PER_VWARP-1)
 
 	// Perform the same transposition as in __transposed_write_BC, but in reverse order.
 	// See the illustrations in comments for __transposed_write_BC.
 
 	// read and rotate rows, in reverse row order
+	// Use TILE_STRIDE (fixed 32) to match the write pattern and avoid overlap
 	uint4 T1[8], T2[8];
 	const uint4 *loc;
-	loc = &S[(spacing*2*(32*tile   ) +  lane8      + 8*SHFL(row, 0, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile   ) +  lane8      + 8*SHFL(row, 0, 8))];
 	T1[7] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+4 ) + (lane8+7)%8 + 8*SHFL(row, 1, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+4 ) + (lane8+7)%8 + 8*SHFL(row, 1, 8))];
 	T1[6] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+8 ) + (lane8+6)%8 + 8*SHFL(row, 2, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+8 ) + (lane8+6)%8 + 8*SHFL(row, 2, 8))];
 	T1[5] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+12) + (lane8+5)%8 + 8*SHFL(row, 3, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+12) + (lane8+5)%8 + 8*SHFL(row, 3, 8))];
 	T1[4] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+16) + (lane8+4)%8 + 8*SHFL(row, 4, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+16) + (lane8+4)%8 + 8*SHFL(row, 4, 8))];
 	T1[3] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+20) + (lane8+3)%8 + 8*SHFL(row, 5, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+20) + (lane8+3)%8 + 8*SHFL(row, 5, 8))];
 	T1[2] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+24) + (lane8+2)%8 + 8*SHFL(row, 6, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+24) + (lane8+2)%8 + 8*SHFL(row, 6, 8))];
 	T1[1] = __ldg(loc);
-	loc = &S[(spacing*2*(32*tile+28) + (lane8+1)%8 + 8*SHFL(row, 7, 8))];
+	loc = &S[(spacing*2*(TILE_STRIDE*tile+28) + (lane8+1)%8 + 8*SHFL(row, 7, 8))];
 	T1[0] = __ldg(loc);
 
 	// rotate columns down using a barrel shifter simulation
@@ -309,12 +332,20 @@ static __device__ __forceinline__ void xor_chacha8(uint4 *B, uint4 *C)
 //! Experimental Scrypt-Jane core kernel for Titan devices.
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
+//! 
+//! Modified to support configurable threads per warp (8, 16, 24, 32)
+//! Use THREADS_PER_WARP to tune the granularity of work units.
 ////////////////////////////////////////////////////////////////////////////////
 __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP)
 {
-	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
-	g_idata += 32 * offset;
-	uint32_t * V = c_V[offset / warpSize];
+	// Calculate warp ID (global index of this warp)
+	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
+	
+	// Host allocates THREADS_PER_WARP work units per warp (with THREADS_PER_WU=1)
+	// Each "work unit" has 32 uint32_t, so total input per warp = 32 * THREADS_PER_WARP
+	// The transposed read accesses 8 * THREADS_PER_WARP uint4 = 32 * THREADS_PER_WARP uint32_t
+	g_idata += 32 * THREADS_PER_WARP * vwarp_id;
+	uint32_t * V = c_V[vwarp_id];
 	uint4 B[4], C[4];
 
 	__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
@@ -323,15 +354,21 @@ __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, un
 	for (int i = 1; i < iterations; i++) {
 		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
+		  // Stride between scratchpad rows: 8 uint4 = 32 uint32_t per row
 		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), c_spacing);
 	}
 }
 
 __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP)
 {
-	int offset = blockIdx.x * blockDim.x + threadIdx.x / warpSize * warpSize;
-	g_odata += 32 * offset;
-	uint32_t * V = c_V[offset / warpSize];
+	// Calculate warp ID (global index of this warp)
+	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
+	
+	// Host expects THREADS_PER_WARP work units per warp (with THREADS_PER_WU=1)
+	// Each "work unit" has 32 uint32_t, so total output per warp = 32 * THREADS_PER_WARP
+	// The transposed write produces 8 * THREADS_PER_WARP uint4 = 32 * THREADS_PER_WARP uint32_t
+	g_odata += 32 * THREADS_PER_WARP * vwarp_id;
+	uint32_t * V = c_V[vwarp_id];
 	uint4 B[4], C[4];
 
 	int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
@@ -339,6 +376,9 @@ __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, un
 	while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 
 	for (int i = 0; i < iterations; i++)  {
+		// Each thread calculates its own slot from its own C[0].x
+		// The transposed_read_BC uses SHFL(row, k, 8) to gather from different rows
+		// based on each thread's slot value - this is a vectorized gather pattern
 		int slot = C[0].x & c_N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
 		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, c_spacing, pos);
