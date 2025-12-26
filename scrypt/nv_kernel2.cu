@@ -57,17 +57,13 @@ static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm(
 // virtual lane ID within virtual warp (0 to THREADS_PER_WARP-1)
 static __device__ __inline__ unsigned int __vLaneId() { return threadIdx.x % THREADS_PER_WARP; }
 
-// forward references
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP);
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP);
+// forward references - N_1 and spacing passed as register parameters for better performance
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
 
 // scratchbuf constants (pointers to scratch buffer for each work unit)
+// Note: c_V stays in constant memory because it's an array of pointers that varies per virtual warp
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
-
-// iteration count N
-__constant__ uint32_t c_N;
-__constant__ uint32_t c_N_1; // N - 1
-__constant__ uint32_t c_spacing; // (N+LOOKUP_GAP-1)/LOOKUP_GAP
 
 
 NV2Kernel::NV2Kernel() : KernelInterface()
@@ -81,27 +77,15 @@ void NV2Kernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 
 bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
-
-	// make some constants available to kernel, update only initially and when changing
-	static uint32_t prev_N[MAX_GPUS] = { 0 };
-
-	if (N != prev_N[thr_id]) {
-		uint32_t h_N = N;
-		uint32_t h_N_1 = N-1;
-		uint32_t h_spacing = (N+LOOKUP_GAP-1)/LOOKUP_GAP;
-
-		cudaMemcpyToSymbolAsync(c_N, &h_N, sizeof(uint32_t), 0, cudaMemcpyHostToDevice, stream);
-		cudaMemcpyToSymbolAsync(c_N_1, &h_N_1, sizeof(uint32_t), 0, cudaMemcpyHostToDevice, stream);
-		cudaMemcpyToSymbolAsync(c_spacing, &h_spacing, sizeof(uint32_t), 0, cudaMemcpyHostToDevice, stream);
-
-		prev_N[thr_id] = N;
-	}
+	// Compute N_1 and spacing as register parameters (faster than constant memory)
+	uint32_t N_1 = N - 1;
+	uint32_t spacing = (N + LOOKUP_GAP - 1) / LOOKUP_GAP;
 
 	// First phase: Sequential writes to scratchpad.
-	nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP);
+	nv2_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
 
 	// Second phase: Random read access from scratchpad.
-	nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP);
+	nv2_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
 
 	return true;
 }
@@ -336,7 +320,7 @@ static __device__ __forceinline__ void xor_chacha8(uint4 *B, uint4 *C)
 //! Modified to support configurable threads per warp (8, 16, 24, 32)
 //! Use THREADS_PER_WARP to tune the granularity of work units.
 ////////////////////////////////////////////////////////////////////////////////
-__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP)
+__global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
@@ -349,17 +333,17 @@ __global__ void nv2_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, un
 	uint4 B[4], C[4];
 
 	__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
-	__transposed_write_BC(B, C, (uint4*)V, c_spacing);
+	__transposed_write_BC(B, C, (uint4*)V, spacing);
 
 	for (int i = 1; i < iterations; i++) {
 		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
 		  // Stride between scratchpad rows: 8 uint4 = 32 uint32_t per row
-		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), c_spacing);
+		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), spacing);
 	}
 }
 
-__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP)
+__global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
@@ -371,17 +355,17 @@ __global__ void nv2_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, un
 	uint32_t * V = c_V[vwarp_id];
 	uint4 B[4], C[4];
 
-	int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
-	__transposed_read_BC((uint4*)V, B, C, c_spacing, pos);
+	int pos = N_1/LOOKUP_GAP, loop = 1 + (N_1-pos*LOOKUP_GAP);
+	__transposed_read_BC((uint4*)V, B, C, spacing, pos);
 	while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 
 	for (int i = 0; i < iterations; i++)  {
 		// Each thread calculates its own slot from its own C[0].x
 		// The transposed_read_BC uses SHFL(row, k, 8) to gather from different rows
 		// based on each thread's slot value - this is a vectorized gather pattern
-		int slot = C[0].x & c_N_1;
+		int slot = C[0].x & N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
-		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, c_spacing, pos);
+		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, spacing, pos);
 		while(loop--) { xor_chacha8(b, c); xor_chacha8(c, b); }
 #pragma unroll 4
 		for(int n = 0; n < 4; n++) { B[n] ^= b[n]; C[n] ^= c[n]; }
