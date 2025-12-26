@@ -138,7 +138,6 @@ int cuda_throughput(int thr_id)
 
 		unsigned int THREADS_PER_WU = kernel->threads_per_wu();
 		unsigned int THREADS_PER_WARP = device_threads_per_warp[thr_id];
-		if (THREADS_PER_WARP == 0) THREADS_PER_WARP = 32; // default to 32
 		unsigned int WU_PER_WARP = THREADS_PER_WARP / THREADS_PER_WU;
 		unsigned int WU_PER_BLOCK = WU_PER_WARP * WARPS_PER_BLOCK;
 		unsigned int WU_PER_LAUNCH = GRID_BLOCKS * WU_PER_BLOCK;
@@ -210,6 +209,8 @@ inline int _ConvertSMVer2Cores(int major, int minor)
 		{ 0x50, 128 }, // Maxwell First Generation (SM 5.0) GTX750/750Ti
 		{ 0x52, 128 }, // Maxwell Second Generation (SM 5.2) GTX980 = 2048 cores / 16 SMs - GTX970 1664 cores / 13 SMs
 		{ 0x61, 128 }, // Pascal GeForce (SM 6.1)
+		{ 0x75, 64 }, // Turing RTX 2070 Super (SM 7.5)
+		{ 0x86, 128 }, // Ampere RTX A5000 (SM 8.6)
 		{ -1, -1 },
 	};
 
@@ -251,14 +252,16 @@ static void log_gpu_memory_info(int thr_id, const char *prefix_format, ...)
 
 	size_t free_mem = 0, total_mem = 0;
 	cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
+	int dev_id = device_map[thr_id];
+	const char* dev_name = device_name[dev_id] ? device_name[dev_id] : "Unknown";
 	if (mem_err == cudaSuccess) {
 		double free_mb = (double)free_mem / (1024.0 * 1024.0);
 		double total_mb = (double)total_mem / (1024.0 * 1024.0);
 		double used_mb = total_mb - free_mb;
-		applog(LOG_INFO, "GPU #%d: %sMemory - Total: %.2f MB, Available: %.2f MB, Used: %.2f MB (%.1f%%)",
-			device_map[thr_id], prefix, total_mb, free_mb, used_mb, (used_mb / total_mb) * 100.0);
+		applog(LOG_INFO, "GPU #%d (%s): %sMemory - Total: %.2f MB, Available: %.2f MB, Used: %.2f MB (%.1f%%)",
+			dev_id, dev_name, prefix, total_mb, free_mb, used_mb, (used_mb / total_mb) * 100.0);
 	} else {
-		applog(LOG_WARNING, "GPU #%d: %sFailed to query memory info: %s", device_map[thr_id], prefix, cudaGetErrorString(mem_err));
+		applog(LOG_WARNING, "GPU #%d (%s): %sFailed to query memory info: %s", dev_id, dev_name, prefix, cudaGetErrorString(mem_err));
 	}
 }
 
@@ -278,6 +281,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 		device_interactive[thr_id] = props.kernelExecTimeoutEnabled;
 
 	// figure out which kernel implementation to use
+	bool kernel_auto_selected = false;
 	if (!validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK, &kernel, &props)) {
 		kernel = NULL;
 		if (device_config[thr_id] != NULL) {
@@ -286,13 +290,47 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 			else if (device_config[thr_id][0] == 'P' || device_config[thr_id][0] == 't' || device_config[thr_id][0] == 'p')
 				kernel = new PascalKernel();
 		}
-		if (kernel == NULL) kernel = Best_Kernel_Heuristics(&props);
+		if (kernel == NULL) {
+			kernel = Best_Kernel_Heuristics(&props);
+			kernel_auto_selected = true;
+		}
 	}
 
 	if (kernel->get_major_version() > props.major || kernel->get_major_version() == props.major && kernel->get_minor_version() > props.minor)
 	{
 		applog(LOG_ERR, "GPU #%d: FATAL: the '%c' kernel requires %d.%d capability!", device_map[thr_id], kernel->get_identifier(), kernel->get_major_version(), kernel->get_minor_version());
 		return 0;
+	}
+
+	// Apply auto-selection logic for device_threads_per_warp and device_lookup_gap
+	if (kernel_auto_selected) {
+		char kernel_id = kernel->get_identifier();
+		if (kernel_id == 'V') {
+			// VoltaKernel: set device_threads_per_warp to 16 if -1, set device_lookup_gap to 64 if 1
+			if (device_threads_per_warp[thr_id] == -1)
+				device_threads_per_warp[thr_id] = 16;
+			if (device_lookup_gap[thr_id] == 1)
+				device_lookup_gap[thr_id] = 64;
+		} else if (kernel_id == 'P') {
+			// PascalKernel: set device_threads_per_warp to 32 if -1, set device_lookup_gap to 64 if 1
+			if (device_threads_per_warp[thr_id] == -1)
+				device_threads_per_warp[thr_id] = 32;
+			if (device_lookup_gap[thr_id] == 1)
+				device_lookup_gap[thr_id] = 64;
+		}
+	}
+
+	// Ensure device_threads_per_warp is set based on kernel if still -1
+	if (device_threads_per_warp[thr_id] == -1) {
+		char kernel_id = kernel->get_identifier();
+		if (kernel_id == 'V') {
+			device_threads_per_warp[thr_id] = 16;
+		} else if (kernel_id == 'P') {
+			device_threads_per_warp[thr_id] = 32;
+		} else {
+			// fallback to 32 for unknown kernels
+			device_threads_per_warp[thr_id] = 32;
+		}
 	}
 
 	// set whatever cache configuration and shared memory bank mode the kernel prefers
@@ -314,24 +352,26 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	// number of threads collaborating on one work unit (hash)
 	unsigned int THREADS_PER_WU = kernel->threads_per_wu();
 	unsigned int THREADS_PER_WARP = device_threads_per_warp[thr_id];
-	if (THREADS_PER_WARP == 0) THREADS_PER_WARP = 32; // default to 32
 	unsigned int WU_PER_WARP = THREADS_PER_WARP / THREADS_PER_WU;
 	unsigned int LOOKUP_GAP = device_lookup_gap[thr_id];
 	unsigned int BACKOFF = device_backoff[thr_id];
 	unsigned int N = (1 << (opt_nfactor+1));
 	double szPerWarp = (double)(SCRATCH * WU_PER_WARP * sizeof(uint32_t));
 	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
-	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp (size=%d).", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0), THREADS_PER_WARP);
+	int dev_id = device_map[thr_id];
+	const char* dev_name = device_name[dev_id] ? device_name[dev_id] : "Unknown";
+	applog(LOG_INFO, "GPU #%d (%s): %d hashes / %.1f MB per warp (size=%d, lookup_gap=%d).", dev_id, dev_name, WU_PER_WARP, szPerWarp / (1024.0 * 1024.0), THREADS_PER_WARP, LOOKUP_GAP);
 
 	uint32_t *d_V = NULL;
-	// Determine MAXWARPS based on remaining available GPU memory and szPerWarp (reserve 50 MB)
+	// Determine MAXWARPS based on remaining available GPU memory and szPerWarp
 	size_t free_mem = 0, total_mem = 0;
 	cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
 	if (mem_err == cudaSuccess) {
-		size_t available_mem = (free_mem > 52428800ULL) ? (free_mem - 52428800ULL) : 0;
+		size_t reserve_bytes = (opt_reserve_vram > 0) ? ((size_t)opt_reserve_vram * 1024ULL * 1024ULL) : 0ULL;
+		size_t available_mem = (free_mem > reserve_bytes) ? (free_mem - reserve_bytes) : 0;
 		MAXWARPS[thr_id] = min((int)(available_mem / szPerWarp), TOTAL_WARP_LIMIT);
-		applog(LOG_INFO, "GPU #%d: Total: %.2f MB, Available: %.2f MB, Calculated MAXWARPS: %d",
-			device_map[thr_id], (double)total_mem / (1024.0 * 1024.0), (double)free_mem / (1024.0 * 1024.0), MAXWARPS[thr_id]);
+		applog(LOG_INFO, "GPU #%d (%s): Total: %.2f MB, Available: %.2f MB, Calculated MAXWARPS: %d",
+			dev_id, dev_name, (double)total_mem / (1024.0 * 1024.0), (double)free_mem / (1024.0 * 1024.0), MAXWARPS[thr_id]);
 	} else {
 		MAXWARPS[thr_id] = TOTAL_WARP_LIMIT;
 		applog(LOG_WARNING, "GPU #%d: Cannot determine MAXWARPS from memory info, using TOTAL_WARP_LIMIT: %s",
@@ -365,7 +405,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 		}
 	}
 	MAXWARPS[thr_id] = warp;
-	applog(LOG_INFO, "GPU #%d: Actual MAXWARPS: %d", device_map[thr_id], MAXWARPS[thr_id]);
+	applog(LOG_INFO, "GPU #%d (%s): Actual MAXWARPS: %d", dev_id, dev_name, MAXWARPS[thr_id]);
 	log_gpu_memory_info(thr_id, "After warp allocation: ");
 	kernel->set_scratchbuf_constants(MAXWARPS[thr_id], h_V[thr_id]);
 
@@ -394,64 +434,23 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 
 		// defaults, in case nothing else is chosen below
 		optimal_blocks = 4 * device_cores / WU_PER_WARP;
-		WARPS_PER_BLOCK = 2;
 
-		// Based on compute capability, pick a known good block x warp configuration.
-		if (props.major >= 6 && props.minor >= 1)
+		if (optimal_blocks > MAXWARPS[thr_id])
 		{
-			optimal_blocks = MAXWARPS[thr_id];
 			WARPS_PER_BLOCK = 1;
-		}
-		else if (props.major >= 3)
-		{
-			if (props.major == 3 && props.minor == 5) // GK110 (Tesla K20X, K20, GeForce GTX TITAN)
-			{
-				// TODO: what to do with Titan and Tesla K20(X)?
-				// for now, do the same as for GTX 660Ti (2GB)
-				optimal_blocks = (int)(optimal_blocks * 0.8809524);
-				WARPS_PER_BLOCK = 2;
-			}
-			else // GK104, GK106, GK107 ...
-			{
-				if (MAXWARPS[thr_id] > (int)(optimal_blocks * 1.7261905) * 2)
-				{
-					// this results in 290x2 configuration on GTX 660Ti (3GB)
-					// but it requires 3GB memory on the card!
-					optimal_blocks = (int)(optimal_blocks * 1.7261905);
-					WARPS_PER_BLOCK = 2;
-				}
-				else
-				{
-					// this results in 148x2 configuration on GTX 660Ti (2GB)
-					optimal_blocks = (int)(optimal_blocks * 0.8809524);
-					WARPS_PER_BLOCK = 2;
-				}
-			}
-		}
-		// 1st generation Fermi (compute 2.0) GF100, GF110
-		else if (props.major == 2 && props.minor == 0)
-		{
-			// this results in a 60x4 configuration on GTX 570
-			optimal_blocks = 4 * device_cores / WU_PER_WARP;
-			WARPS_PER_BLOCK = 4;
-		}
-		// 2nd generation Fermi (compute 2.1) GF104,106,108,114,116
-		else if (props.major == 2 && props.minor == 1)
-		{
-			// this results in a 56x2 configuration on GTX 460
-			optimal_blocks = props.multiProcessorCount * 8;
+			optimal_blocks = MAXWARPS[thr_id];
+		} else {
 			WARPS_PER_BLOCK = 2;
+			optimal_blocks = optimal_blocks / 2;
 		}
 
-		// in case we run out of memory with the automatically chosen configuration,
-		// first back off with WARPS_PER_BLOCK, then reduce optimal_blocks.
-		if (WARPS_PER_BLOCK==3 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
-			WARPS_PER_BLOCK = 2;
-		while (optimal_blocks > 0 && optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
-			optimal_blocks--;
+		if (WARPS_PER_BLOCK > kernel->max_warps_per_block()) {
+			applog(LOG_ERR, "GPU #%d: FATAL: Given launch config '%s' exceeds warp limit for '%c' kernel.", device_map[thr_id], device_config[thr_id], kernel->get_identifier());
+			return 0;
+		}
 	}
 
-	applog(LOG_INFO, "GPU #%d: using launch configuration %c%dx%d", device_map[thr_id], kernel->get_identifier(), optimal_blocks, WARPS_PER_BLOCK);
+	applog(LOG_INFO, "GPU #%d (%s): using launch configuration %c%dx%d", dev_id, dev_name, kernel->get_identifier(), optimal_blocks, WARPS_PER_BLOCK);
 
 	// back off unnecessary memory allocations to have some breathing room
 	while (MAXWARPS[thr_id] > 0 && MAXWARPS[thr_id] > optimal_blocks * WARPS_PER_BLOCK) {

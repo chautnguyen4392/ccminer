@@ -161,6 +161,7 @@ void gpulog(int prio, int thr_id, const char *fmt, ...)
 	char _ALIGN(128) pfmt[128];
 	char _ALIGN(128) line[256];
 	int len, dev_id = device_map[thr_id % MAX_GPUS];
+	const char* dev_name = device_name[dev_id] ? device_name[dev_id] : "Unknown";
 	va_list ap;
 
 	if (prio == LOG_DEBUG && !opt_debug)
@@ -169,7 +170,7 @@ void gpulog(int prio, int thr_id, const char *fmt, ...)
 	if (gpu_threads > 1)
 		len = snprintf(pfmt, 128, "GPU T%d: %s", thr_id, fmt);
 	else
-		len = snprintf(pfmt, 128, "GPU #%d: %s", dev_id, fmt);
+		len = snprintf(pfmt, 128, "GPU #%d (%s): %s", dev_id, dev_name, fmt);
 	pfmt[sizeof(pfmt)-1]='\0';
 
 	va_start(ap, fmt);

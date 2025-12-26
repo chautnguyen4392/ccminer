@@ -202,6 +202,7 @@ double opt_max_rate = -1.;
 double opt_resume_temp = 0.;
 double opt_resume_diff = 0.;
 double opt_resume_rate = -1.;
+int opt_reserve_vram = 50; // VRAM to reserve in MB (default: 50 MB)
 
 int opt_statsavg = 30;
 
@@ -345,7 +346,8 @@ Options:\n\
       --max-rate=N[KMG] Only mine if net hashrate is less than specified value\n\
       --max-diff=N      Only mine if net difficulty is less than specified value\n\
                         Can be tuned with --resume-diff=N to set a resume value\n\
-      --max-log-rate    Interval to reduce per gpu hashrate logs (default: 3)\n"
+      --max-log-rate    Interval to reduce per gpu hashrate logs (default: 3)\n\
+      --reserve-vram=N  Amount of VRAM to reserve in MB (default: 50)\n"
 #if defined(__linux) /* via nvml */
 "\
       --mem-clock=3505  Set the gpu memory max clock (346.72+ driver)\n\
@@ -422,6 +424,7 @@ struct option options[] = {
 	{ "resume-diff", 1, NULL, 1063 },
 	{ "resume-rate", 1, NULL, 1064 },
 	{ "resume-temp", 1, NULL, 1065 },
+	{ "reserve-vram", 1, NULL, 1066 },
 	{ "pass", 1, NULL, 'p' },
 	{ "pool-name", 1, NULL, 1100 },     // pool
 	{ "pool-algo", 1, NULL, 1101 },     // pool
@@ -3018,6 +3021,11 @@ void parse_arg(int key, char *arg)
 		d = atof(arg);
 		opt_resume_temp = d;
 		break;
+	case 1066: // reserve-vram
+		v = atoi(arg);
+		if (v >= 0)
+			opt_reserve_vram = v;
+		break;
 	case 'd': // --device
 		{
 			int device_thr[MAX_GPUS] = { 0 };
@@ -3312,7 +3320,7 @@ int main(int argc, char *argv[])
 		device_backoff[i] = is_windows() ? 12 : 2;
 		device_bfactor[i] = is_windows() ? 11 : 0;
 		device_lookup_gap[i] = 1;
-		device_threads_per_warp[i] = 32; // default to 32
+		device_threads_per_warp[i] = -1; // default to -1 (auto-detect based on kernel)
 		device_batchsize[i] = 4194304;
 		device_interactive[i] = -1;
 		device_pstate[i] = -1;
