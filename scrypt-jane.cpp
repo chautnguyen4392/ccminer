@@ -764,8 +764,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 					// Calculate H/s: throughput / elapsed_ms * 1000 (convert ms to seconds)
 					float hashes_per_sec = (elapsed_ms > 0.0f) ? (throughput / elapsed_ms * 1000.0f) : 0.0f;
 					// Log timing information
-					applog(LOG_INFO, "GPU #%d: cuda_scrypt_core execution time: %.3f ms (n=%u, iteration=%d, H/s=%.2f)", 
-							device_map[thr_id], elapsed_ms, n, iteration, hashes_per_sec);
+					applog(LOG_INFO, "GPU #%d: cuda_scrypt_core execution time: %.3f ms (total hashes=%u, iteration=%d, H/s=%.2f)", 
+							device_map[thr_id], elapsed_ms, throughput, iteration, hashes_per_sec);
 				}
 			} else {
 				// Fallback: execute without timing if events not available

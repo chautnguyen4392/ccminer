@@ -4,6 +4,7 @@
 //
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <map>
 #include <algorithm>
 #include <unistd.h> // usleep
@@ -133,6 +134,7 @@ std::map<int, uint32_t *> context_ostate[2];
 std::map<int, uint32_t *> context_hash[2];
 
 int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurrent, int &wpb);
+static void log_gpu_memory_info(int thr_id, const char *prefix_format, ...);
 
 int cuda_throughput(int thr_id)
 {
@@ -272,6 +274,28 @@ static inline int console_width() {
 	return 999;
 }
 #endif
+
+// Query and log GPU memory information at runtime
+static void log_gpu_memory_info(int thr_id, const char *prefix_format, ...)
+{
+	char prefix[256];
+	va_list args;
+	va_start(args, prefix_format);
+	vsnprintf(prefix, sizeof(prefix), prefix_format, args);
+	va_end(args);
+
+	size_t free_mem = 0, total_mem = 0;
+	cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
+	if (mem_err == cudaSuccess) {
+		double free_mb = (double)free_mem / (1024.0 * 1024.0);
+		double total_mb = (double)total_mem / (1024.0 * 1024.0);
+		double used_mb = total_mb - free_mb;
+		applog(LOG_INFO, "GPU #%d: %sMemory - Total: %.2f MB, Available: %.2f MB, Used: %.2f MB (%.1f%%)",
+			device_map[thr_id], prefix, total_mb, free_mb, used_mb, (used_mb / total_mb) * 100.0);
+	} else {
+		applog(LOG_WARNING, "GPU #%d: %sFailed to query memory info: %s", device_map[thr_id], prefix, cudaGetErrorString(mem_err));
+	}
+}
 
 int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurrent, int &WARPS_PER_BLOCK)
 {
@@ -448,10 +472,19 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 	else
 	{
-		if (validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK))
-			MAXWARPS[thr_id] = optimal_blocks * WARPS_PER_BLOCK;
-		else
+		// Determine MAXWARPS based on remaining available GPU memory and szPerWarp (reserve 50 MB)
+		size_t free_mem = 0, total_mem = 0;
+		cudaError_t mem_err = cudaMemGetInfo(&free_mem, &total_mem);
+		if (mem_err == cudaSuccess) {
+			size_t available_mem = (free_mem > 52428800ULL) ? (free_mem - 52428800ULL) : 0;
+			MAXWARPS[thr_id] = min((int)(available_mem / szPerWarp), TOTAL_WARP_LIMIT);
+			applog(LOG_INFO, "GPU #%d: Total: %.2f MB, Available: %.2f MB, Calculated MAXWARPS: %d",
+				device_map[thr_id], (double)total_mem / (1024.0 * 1024.0), (double)free_mem / (1024.0 * 1024.0), MAXWARPS[thr_id]);
+		} else {
 			MAXWARPS[thr_id] = TOTAL_WARP_LIMIT;
+			applog(LOG_WARNING, "GPU #%d: Cannot determine MAXWARPS from memory info, using TOTAL_WARP_LIMIT: %s",
+				device_map[thr_id], cudaGetErrorString(mem_err));
+		}
 
 		// chunked memory allocation up to device limits
 		int warp;
@@ -462,20 +495,26 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 			cudaMalloc((void **) &h_V[thr_id][warp], (SCRATCH * WU_PER_WARP + h_V_extra[thr_id][warp])*sizeof(uint32_t));
 			if (cudaGetLastError() == cudaSuccess) h_V[thr_id][warp] += h_V_extra[thr_id][warp];
 			else {
+				applog(LOG_WARNING, "GPU #%d: Failed to allocate memory for warp %d, back off by 1 warp", device_map[thr_id], warp);
 				h_V_extra[thr_id][warp] = 0;
-
-				// back off by several warp allocations to have some breathing room
-				int remove = (BACKOFF*warp+50)/100;
-				for (int i=0; warp > 0 && i < remove; ++i) {
-					warp--;
-					checkCudaErrors(cudaFree(h_V[thr_id][warp]-h_V_extra[thr_id][warp]));
-					h_V[thr_id][warp] = NULL; h_V_extra[thr_id][warp] = 0;
-				}
-
+				// Just back off by 1 warp
+				warp--;
+				checkCudaErrors(cudaFree(h_V[thr_id][warp]-h_V_extra[thr_id][warp]));
+				h_V[thr_id][warp] = NULL; h_V_extra[thr_id][warp] = 0;
 				break;
+				// // back off by several warp allocations to have some breathing room
+				// int remove = (BACKOFF*warp+50)/100;
+				// for (int i=0; warp > 0 && i < remove; ++i) {
+				// 	warp--;
+				// 	checkCudaErrors(cudaFree(h_V[thr_id][warp]-h_V_extra[thr_id][warp]));
+				// 	h_V[thr_id][warp] = NULL; h_V_extra[thr_id][warp] = 0;
+				// }
+
 			}
 		}
 		MAXWARPS[thr_id] = warp;
+		applog(LOG_INFO, "GPU #%d: Actual MAXWARPS: %d", device_map[thr_id], MAXWARPS[thr_id]);
+		log_gpu_memory_info(thr_id, "After warp allocation: ");
 	}
 	kernel->set_scratchbuf_constants(MAXWARPS[thr_id], h_V[thr_id]);
 
@@ -484,7 +523,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 		if (optimal_blocks * WARPS_PER_BLOCK > MAXWARPS[thr_id])
 		{
 			optimal_blocks = MAXWARPS[thr_id] / WARPS_PER_BLOCK;
-			applog(LOG_ERR, "GPU #%d: FATAL: Given launch config '%s' requires too much memory, adjust it to %dx%d.", device_map[thr_id], device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK);
+			applog(LOG_WARNING, "GPU #%d: WARNING: Given launch config '%s' requires too much memory, adjust it to %dx%d.", device_map[thr_id], device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK);
 		}
 
 		if (WARPS_PER_BLOCK > kernel->max_warps_per_block())
@@ -652,7 +691,6 @@ skip:           ;
 			// Based on compute capability, pick a known good block x warp configuration.
 			if (props.major >= 6 && props.minor >= 1)
 			{
-				size_t warpSize = SCRATCH * WU_PER_WARP * sizeof(uint32_t);
 				optimal_blocks = MAXWARPS[thr_id];
 				WARPS_PER_BLOCK = 1;
 			}
