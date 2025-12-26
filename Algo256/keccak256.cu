@@ -8,10 +8,9 @@ extern "C"
 #include "sph/sph_shavite.h"
 #include "sph/sph_simd.h"
 #include "sph/sph_keccak.h"
-
-#include "miner.h"
 }
 
+#include "miner.h"
 #include "cuda_helper.h"
 
 // SM5+ cuda

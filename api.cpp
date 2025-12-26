@@ -233,7 +233,7 @@ static char *getpoolnfo(char *params)
 		sprintf(extra, "0x");
 		if (p->algo == ALGO_DECRED) {
 			char compat[32] = { 0 };
-			cbin2hex(&extra[2], (const char*) stratum.xnonce1, min(36, stratum.xnonce2_size));
+			cbin2hex(&extra[2], (const char*) stratum.xnonce1, min((size_t)36, stratum.xnonce2_size));
 			cbin2hex(compat, (const char*) stratum.job.xnonce2, 4);
 			memcpy(&extra[2], compat, 8); // compat extranonce
 		} else {

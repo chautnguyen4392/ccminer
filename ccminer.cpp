@@ -836,7 +836,7 @@ static bool work_decode(const json_t *val, struct work *work)
 					work->tx_count = 0;
 					break;
 				}
-				hex2bin((uchar*)work->txs[tx].data, hexstr, min(txlen, POK_MAX_TX_SZ));
+				hex2bin((uchar*)work->txs[tx].data, hexstr, min(txlen, (size_t)POK_MAX_TX_SZ));
 				work->txs[tx].len = (uint32_t) (txlen);
 				totlen += txlen;
 			}
@@ -2330,7 +2330,7 @@ static void *miner_thread(void *userdata)
 		if (have_stratum)
 			max64 = LP_SCANTIME;
 		else
-			max64 = max(1, (int64_t) scan_time + g_work_time - time(NULL));
+			max64 = max((int64_t)1, (int64_t) scan_time + g_work_time - time(NULL));
 
 		/* time limit */
 		if (opt_time_limit > 0 && firstwork_time) {
@@ -2476,11 +2476,11 @@ static void *miner_thread(void *userdata)
 				minmax = 0x1000;
 				break;
 			}
-			max64 = max(minmax-1, max64);
+			max64 = max((uint64_t)(minmax-1), max64);
 		}
 
 		// we can't scan more than uint32 capacity
-		max64 = min(UINT32_MAX, max64);
+		max64 = min((uint64_t)UINT32_MAX, max64);
 
 		start_nonce = nonceptr[0];
 
