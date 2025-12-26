@@ -20,7 +20,6 @@ public:
 
 	virtual int max_warps_per_block() { return 24; };
 	virtual int get_texel_width() { return 4; };
-	virtual bool no_textures() { return true; }
 	virtual bool support_lookup_gap() { return true; }
 
 	virtual cudaSharedMemConfig shared_mem_config() { return cudaSharedMemBankSizeFourByte; }

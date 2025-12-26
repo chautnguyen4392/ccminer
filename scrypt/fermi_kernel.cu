@@ -22,63 +22,17 @@
 
 #define THREADS_PER_WU 1  // single thread per hash
 
-#define TEXWIDTH 32768
-
 // forward references
 __global__ void fermi_scrypt_core_kernelA(uint32_t *g_idata, unsigned int N);
 __global__ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N);
-template <int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N);
 __global__ void fermi_scrypt_core_kernelA_LG(uint32_t *g_idata, unsigned int N, unsigned int LOOKUP_GAP);
 __global__ void fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
-template <int TEX_DIM> __global__ void fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP);
 
 // scratchbuf constants (pointers to scratch buffer for each warp, i.e. 32 hashes)
 __constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
 
-// using texture references for the "tex" variants of the B kernels
-texture<uint4, 1, cudaReadModeElementType> texRef1D_4_V;
-texture<uint4, 2, cudaReadModeElementType> texRef2D_4_V;
-
 FermiKernel::FermiKernel() : KernelInterface()
 {
-}
-
-bool FermiKernel::bindtexture_1D(uint32_t *d_V, size_t size)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef1D_4_V.normalized = 0;
-	texRef1D_4_V.filterMode = cudaFilterModePoint;
-	texRef1D_4_V.addressMode[0] = cudaAddressModeClamp;
-	checkCudaErrors(cudaBindTexture(NULL, &texRef1D_4_V, d_V, &channelDesc4, size));
-	return true;
-}
-
-bool FermiKernel::bindtexture_2D(uint32_t *d_V, int width, int height, size_t pitch)
-{
-	cudaChannelFormatDesc channelDesc4 = cudaCreateChannelDesc<uint4>();
-	texRef2D_4_V.normalized = 0;
-	texRef2D_4_V.filterMode = cudaFilterModePoint;
-	texRef2D_4_V.addressMode[0] = cudaAddressModeClamp;
-	texRef2D_4_V.addressMode[1] = cudaAddressModeClamp;
-	// maintain texture width of TEXWIDTH (max. limit is 65000)
-	while (width > TEXWIDTH) { width /= 2; height *= 2; pitch /= 2; }
-	while (width < TEXWIDTH) { width *= 2; height = (height+1)/2; pitch *= 2; }
-//    fprintf(stderr, "total size: %u, %u bytes\n", pitch * height, width * sizeof(uint32_t) * 4 * height);
-//    fprintf(stderr, "binding width width=%d, height=%d, pitch=%d\n", width, height,pitch);
-	checkCudaErrors(cudaBindTexture2D(NULL, &texRef2D_4_V, d_V, &channelDesc4, width, height, pitch));
-	return true;
-}
-
-bool FermiKernel::unbindtexture_1D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef1D_4_V));
-	return true;
-}
-
-bool FermiKernel::unbindtexture_2D()
-{
-	checkCudaErrors(cudaUnbindTexture(texRef2D_4_V));
-	return true;
 }
 
 void FermiKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
@@ -456,85 +410,6 @@ void fermi_scrypt_core_kernelB(uint32_t *g_odata, unsigned int N)
 
 }
 
-template <int TEX_DIM> __global__ void
-fermi_scrypt_core_kernelB_tex(uint32_t *g_odata, unsigned int N)
-{
-	extern __shared__ unsigned char x[];
-	uint32_t ((*X)[WU_PER_WARP][16+4]) = (uint32_t (*)[WU_PER_WARP][16+4]) x;
-
-	int warpIdx        = threadIdx.x / warpSize;
-	int warpThread     = threadIdx.x % warpSize;
-	const unsigned int LOOKUP_GAP = 1;
-
-	// variables supporting the large memory transaction magic
-	unsigned int Y = warpThread/4;
-	unsigned int Z = 4*(warpThread%4);
-
-	// add block specific offsets
-	int WARPS_PER_BLOCK = blockDim.x / 32;
-	int offset = blockIdx.x * WU_PER_BLOCK + warpIdx * WU_PER_WARP;
-	g_odata += 32 * offset;
-
-	// registers to store an entire work unit
-	uint4 B[4], C[4];
-
-	uint32_t ((*XB)[16+4]) = (uint32_t (*)[16+4])&X[warpIdx][Y][Z];
-	uint32_t *XX = X[warpIdx][warpThread];
-
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + (N-1)*32 + Z)/4;
-		*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-					tex1Dfetch(texRef1D_4_V, loc) :
-					tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) B[idx] = *((uint4*)&XX[4*idx]);
-
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + (N-1)*32 + 16+Z)/4;
-		*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-					tex1Dfetch(texRef1D_4_V, loc) :
-					tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
-
-	xor_chacha8(B, C); xor_chacha8(C, B);
-
-	for (int i = 0; i < N; i++) {
-
-		XX[16] = 32 * (C[0].x & (N-1));
-
-#pragma unroll 4
-		for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + XB[wu][16-Z] + Z)/4;
-			*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-						tex1Dfetch(texRef1D_4_V, loc) :
-						tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) B[idx] ^= *((uint4*)&XX[4*idx]);
-
-#pragma unroll 4
-		for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + XB[wu][16-Z] + 16+Z)/4;
-			*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-						tex1Dfetch(texRef1D_4_V, loc) :
-						tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) C[idx] ^= *((uint4*)&XX[4*idx]);
-
-		xor_chacha8(B, C); xor_chacha8(C, B);
-	}
-
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) *((uint4*)&XX[4*idx]) = B[idx];
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8)
-		*((ulonglong2*)(&g_odata[32*(wu+Y)+Z])) = *((ulonglong2*)XB[wu]);
-
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) *((uint4*)&XX[4*idx]) = C[idx];
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8)
-		*((ulonglong2*)(&g_odata[32*(wu+Y)+16+Z])) = *((ulonglong2*)XB[wu]);
-}
-
 //
 // Lookup-Gap variations of the above functions
 //
@@ -683,95 +558,3 @@ fermi_scrypt_core_kernelB_LG(uint32_t *g_odata, unsigned int N, unsigned int LOO
 
 }
 
-template <int TEX_DIM> __global__ void
-fermi_scrypt_core_kernelB_LG_tex(uint32_t *g_odata, unsigned int N, unsigned int LOOKUP_GAP)
-{
-	extern __shared__ unsigned char x[];
-	uint32_t ((*X)[WU_PER_WARP][16+4]) = (uint32_t (*)[WU_PER_WARP][16+4]) x;
-
-	int warpIdx        = threadIdx.x / warpSize;
-	int warpThread     = threadIdx.x % warpSize;
-
-	// variables supporting the large memory transaction magic
-	unsigned int Y = warpThread/4;
-	unsigned int Z = 4*(warpThread%4);
-
-	// add block specific offsets
-	int WARPS_PER_BLOCK = blockDim.x / 32;
-	int offset = blockIdx.x * WU_PER_BLOCK + warpIdx * WU_PER_WARP;
-	g_odata += 32 * offset;
-
-	// registers to store an entire work unit
-	uint4 B[4], C[4];
-
-	uint32_t ((*XB)[16+4]) = (uint32_t (*)[16+4])&X[warpIdx][Y][Z];
-	uint32_t *XX = X[warpIdx][warpThread];
-
-	uint32_t pos = (N-1)/LOOKUP_GAP; uint32_t loop = 1 + (N-1)-pos*LOOKUP_GAP;
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + pos*32 + Z)/4;
-		*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-					tex1Dfetch(texRef1D_4_V, loc) :
-					tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) B[idx] = *((uint4*)&XX[4*idx]);
-
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + pos*32 + 16+Z)/4;
-		*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-					tex1Dfetch(texRef1D_4_V, loc) :
-					tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) C[idx] = *((uint4*)&XX[4*idx]);
-
-	while (loop--) {
-		xor_chacha8(B, C); xor_chacha8(C, B);
-	}
-
-	for (int i = 0; i < N; i++) {
-
-		uint32_t j = C[0].x & (N-1);
-		uint32_t pos = j / LOOKUP_GAP; uint32_t loop = j - pos*LOOKUP_GAP;
-		XX[16] = 32 * pos;
-
-		uint4 b[4], c[4];
-#pragma unroll 4
-		for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + XB[wu][16-Z] + Z)/4;
-			*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-						tex1Dfetch(texRef1D_4_V, loc) :
-						tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) b[idx] = *((uint4*)&XX[4*idx]);
-
-#pragma unroll 4
-		for (int wu=0; wu < 32; wu+=8) { unsigned int loc = (SCRATCH*(offset+wu+Y) + XB[wu][16-Z] + 16+Z)/4;
-			*((uint4*)XB[wu]) = ((TEX_DIM == 1) ?
-						tex1Dfetch(texRef1D_4_V, loc) :
-						tex2D(texRef2D_4_V, 0.5f + (loc%TEXWIDTH), 0.5f + (loc/TEXWIDTH))); }
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) c[idx] = *((uint4*)&XX[4*idx]);
-
-		while (loop--) {
-			xor_chacha8(b, c); xor_chacha8(c, b);
-		}
-
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) B[idx] ^= b[idx];
-#pragma unroll 4
-		for (int idx=0; idx < 4; idx++) C[idx] ^= c[idx];
-
-		xor_chacha8(B, C); xor_chacha8(C, B);
-	}
-
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) *((uint4*)&XX[4*idx]) = B[idx];
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8)
-		*((ulonglong2*)(&g_odata[32*(wu+Y)+Z])) = *((ulonglong2*)XB[wu]);
-
-#pragma unroll 4
-	for (int idx=0; idx < 4; idx++) *((uint4*)&XX[4*idx]) = C[idx];
-#pragma unroll 4
-	for (int wu=0; wu < 32; wu+=8)
-		*((ulonglong2*)(&g_odata[32*(wu+Y)+16+Z])) = *((ulonglong2*)XB[wu]);
-}
