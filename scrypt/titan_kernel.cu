@@ -413,7 +413,7 @@ void TitanKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 }
 
 bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream,
-	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark, int texture_cache)
+	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
 	bool success = true;
 	if (!IS_SCRYPT_JANE())

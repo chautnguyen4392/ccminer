@@ -142,7 +142,6 @@ static bool opt_keep_clocks = false;
 
 // un-linked to cmdline scrypt options (useless)
 int device_batchsize[MAX_GPUS] = { 0 };
-int device_texturecache[MAX_GPUS] = { 0 };
 // implemented scrypt options
 int parallel = 2; // All should be made on GPU
 char *device_config[MAX_GPUS] = { 0 };
@@ -414,7 +413,6 @@ struct option options[] = {
 	{ "no-stratum", 0, NULL, 1007 },
 	{ "interactive", 1, NULL, 1050 },  // scrypt
 	{ "lookup-gap", 1, NULL, 'L' },    // scrypt
-	{ "texture-cache", 1, NULL, 1051 },// scrypt
 	{ "launch-config", 1, NULL, 'l' }, // scrypt bbr xmr
 	{ "scratchpad", 1, NULL, 'k' },    // bbr
 	{ "bfactor", 1, NULL, 1055 },      // xmr
@@ -482,9 +480,6 @@ Scrypt specific options:\n\
       --interactive     comma separated list of flags (0/1) specifying\n\
                         which of the CUDA device you need to run at inter-\n\
                         active frame rates (because it drives a display).\n\
-      --texture-cache   comma separated list of flags (0/1/2) specifying\n\
-                        which of the CUDA devices shall use the texture\n\
-                        cache for mining. Kepler devices may profit.\n\
 ";
 
 static char const xmr_usage[] = "\n\
@@ -2800,18 +2795,6 @@ void parse_arg(int key, char *arg)
 				device_interactive[n++] = last;
 		}
 		break;
-	case 1051: /* scrypt --texture-cache */
-		{
-			char *pch = strtok(arg,",");
-			int n = 0, last = atoi(arg);
-			while (pch != NULL) {
-				device_texturecache[n++] = last = atoi(pch);
-				pch = strtok(NULL, ",");
-			}
-			while (n < MAX_GPUS)
-				device_texturecache[n++] = last;
-		}
-		break;
 	case 1055: /* cryptonight --bfactor */
 		{
 			char *pch = strtok(arg, ",");
@@ -3307,7 +3290,6 @@ int main(int argc, char *argv[])
 		device_lookup_gap[i] = 1;
 		device_batchsize[i] = 4194304;
 		device_interactive[i] = -1;
-		device_texturecache[i] = -1;
 		device_pstate[i] = -1;
 		device_led[i] = -1;
 	}

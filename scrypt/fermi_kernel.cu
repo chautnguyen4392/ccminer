@@ -86,7 +86,7 @@ void FermiKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 	checkCudaErrors(cudaMemcpyToSymbol(c_V, h_V, MAXWARPS*sizeof(uint32_t*), 0, cudaMemcpyHostToDevice));
 }
 
-bool FermiKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark, int texture_cache)
+bool FermiKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
 	bool success = true;
 
@@ -105,33 +105,11 @@ bool FermiKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	// Second phase: Random read access from scratchpad.
 
 	if (LOOKUP_GAP == 1) {
-		if (texture_cache) {
-			if (texture_cache == 1) {
-				if (IS_SCRYPT())      fermi_scrypt_core_kernelB_tex<A_SCRYPT,1><<< grid, threads, shared, stream >>>(d_odata, N);
-				if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelB_tex<A_SCRYPT_JANE,1><<< grid, threads, shared, stream >>>(d_odata, N);
-			} else if (texture_cache == 2) {
-				if (IS_SCRYPT())      fermi_scrypt_core_kernelB_tex<A_SCRYPT,2><<< grid, threads, shared, stream >>>(d_odata, N);
-				if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelB_tex<A_SCRYPT_JANE,2><<< grid, threads, shared, stream >>>(d_odata, N);
-			}
-			else success = false;
-		} else {
-			if (IS_SCRYPT())      fermi_scrypt_core_kernelB<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N);
-			if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelB<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N);
-		}
+		if (IS_SCRYPT())      fermi_scrypt_core_kernelB<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N);
+		if (IS_SCRYPT_JANE()) fermi_scrypt_core_kernelB<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N);
 	} else {
-		if (texture_cache) {
-			if (texture_cache == 1) {
-				if (IS_SCRYPT())       fermi_scrypt_core_kernelB_LG_tex<A_SCRYPT,1><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-				if (IS_SCRYPT_JANE())  fermi_scrypt_core_kernelB_LG_tex<A_SCRYPT_JANE,1><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-			} else if (texture_cache == 2) {
-				if (IS_SCRYPT())       fermi_scrypt_core_kernelB_LG_tex<A_SCRYPT,2><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-				if (IS_SCRYPT_JANE())  fermi_scrypt_core_kernelB_LG_tex<A_SCRYPT_JANE,2><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-			}
-			else success = false;
-		} else {
-			if (IS_SCRYPT())       fermi_scrypt_core_kernelB_LG<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-			if (IS_SCRYPT_JANE())  fermi_scrypt_core_kernelB_LG<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
-		}
+		if (IS_SCRYPT())       fermi_scrypt_core_kernelB_LG<A_SCRYPT><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
+		if (IS_SCRYPT_JANE())  fermi_scrypt_core_kernelB_LG<A_SCRYPT_JANE><<< grid, threads, shared, stream >>>(d_odata, N, LOOKUP_GAP);
 	}
 
 	return success;

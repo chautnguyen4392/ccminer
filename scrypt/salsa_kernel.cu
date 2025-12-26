@@ -312,10 +312,6 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	if (device_interactive[thr_id] == -1)
 		device_interactive[thr_id] = props.kernelExecTimeoutEnabled;
 
-	// turn off texture cache if not otherwise specified
-	if (device_texturecache[thr_id] == -1)
-		device_texturecache[thr_id] = 0;
-
 	// figure out which kernel implementation to use
 	if (!validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK, &kernel, &props)) {
 		kernel = NULL;
@@ -346,12 +342,6 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	checkCudaErrors(cudaDeviceSetCacheConfig(kernel->cache_config()));
 	checkCudaErrors(cudaDeviceSetSharedMemConfig(kernel->shared_mem_config()));
 
-	// some kernels (e.g. Titan) do not support the texture cache
-	if (kernel->no_textures() && device_texturecache[thr_id]) {
-		applog(LOG_WARNING, "GPU #%d: the '%c' kernel ignores the texture cache argument", device_map[thr_id], kernel->get_identifier());
-		device_texturecache[thr_id] = 0;
-	}
-
 	if (device_lookup_gap[thr_id] == 0) device_lookup_gap[thr_id] = 1;
 	if (!kernel->support_lookup_gap() && device_lookup_gap[thr_id] > 1)
 	{
@@ -360,9 +350,8 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	}
 
 	if (opt_debug) {
-		applog(LOG_INFO, "GPU #%d: interactive: %d, tex-cache: %d%s", device_map[thr_id],
-		   (device_interactive[thr_id]  != 0) ? 1 : 0,
-		   (device_texturecache[thr_id] != 0) ? device_texturecache[thr_id] : 0, (device_texturecache[thr_id] != 0) ? "D" : "" );
+		applog(LOG_INFO, "GPU #%d: interactive: %d", device_map[thr_id],
+		   (device_interactive[thr_id]  != 0) ? 1 : 0);
 	}
 
 	// number of threads collaborating on one work unit (hash)
@@ -561,10 +550,9 @@ void cuda_scrypt_core(int thr_id, int stream, unsigned int N)
 	dim3 grid(WU_PER_LAUNCH/WU_PER_BLOCK, 1, 1);
 	dim3 threads(THREADS_PER_WU*WU_PER_BLOCK, 1, 1);
 
-	context_kernel[thr_id]->run_kernel(grid, threads, WARPS_PER_BLOCK, thr_id,
+		context_kernel[thr_id]->run_kernel(grid, threads, WARPS_PER_BLOCK, thr_id,
 		context_streams[stream][thr_id], context_idata[stream][thr_id], context_odata[stream][thr_id],
-		N, LOOKUP_GAP, device_interactive[thr_id], opt_benchmark, device_texturecache[thr_id]
-	);
+		N, LOOKUP_GAP, device_interactive[thr_id], opt_benchmark);
 }
 
 void cuda_scrypt_DtoH(int thr_id, uint32_t *X, int stream, bool postSHA)
