@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright 2010 Jeff Garzik
  * Copyright 2012-2014 pooler
  * Copyright 2014-2017 tpruvot
@@ -142,8 +142,6 @@ static bool opt_keep_clocks = false;
 
 // un-linked to cmdline scrypt options (useless)
 int device_batchsize[MAX_GPUS] = { 0 };
-// implemented scrypt options
-int parallel = 2; // All should be made on GPU
 char *device_config[MAX_GPUS] = { 0 };
 int device_backoff[MAX_GPUS] = { 0 }; // scrypt
 int device_bfactor[MAX_GPUS] = { 0 }; // cryptonight

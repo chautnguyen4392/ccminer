@@ -21,9 +21,6 @@
 // External CUDA stream for timing
 extern std::map<int, cudaStream_t> context_streams[2];
 
-// External parallel mode variable (defined in ccminer.cpp)
-extern int parallel;
-
 #define scrypt_maxN 30  /* (1 << (30 + 1)) = ~2 billion */
 #define scrypt_r_32kb 8 /* (1 << 8) = 256 * 2 blocks in a chunk * 64 bytes = Max of 32kb in a chunk */
 #define scrypt_maxr scrypt_r_32kb /* 32kb */
@@ -619,9 +616,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
     	uint32_t nNonce = bswap_32x4(pdata[(block_header_size/4 - 1)]);
 		char *target_str = get_target_string(ptarget);
 		applog(LOG_INFO,
-				"TACA => scanhash_scrypt_jane[%d], Nfactor = %d, target = %s, Htarg = %x, throughput = %d, parallel = %d, nNonce = %u, max_nonce = %u",
-				thr_id, Nfactor, target_str, Htarg, throughput, parallel,
-				nNonce, max_nonce);
+				"TACA => scanhash_scrypt_jane[%d], Nfactor = %d, target = %s, Htarg = %x, throughput = %d, nNonce = %u, max_nonce = %u",
+				thr_id, Nfactor, target_str, Htarg, throughput, nNonce, max_nonce);
 		free(target_str);
     }
 
@@ -630,7 +626,7 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 		for(int z=0;z<(block_header_size/4);z++) data[k][z] = bswap_32x4(pdata[z]);
 		for(int i=1;i<throughput;++i) memcpy(&data[k][(block_header_size/4)*i], &data[k][0], (block_header_size/4)*sizeof(uint32_t));
 	}
-	if (parallel == 2) prepare_keccak512(thr_id, pdata, block_header_size);
+	prepare_keccak512(thr_id, pdata, block_header_size);
 
 	scrypt_aligned_alloc Xbuf[2] = { scrypt_alloc(128 * throughput), scrypt_alloc(128 * throughput) };
 	scrypt_aligned_alloc Vbuf = scrypt_alloc(N * 128);
@@ -649,163 +645,95 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 	do {
 		nonce[nxt] = n;
 
-		if (parallel < 2)
+		n += throughput;
+		if (opt_debug)
+			applog(LOG_DEBUG, "GPU #%d: n=%u, max_nonce = %u", device_map[thr_id], n, max_nonce);
+
+		if (opt_debug)
 		{
-			// half of cpu
+			for (int i = 0; iteration > 0 && i < throughput; i++) {
+				char *target_str = get_target_string(ptarget);
+				char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
+				char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
 
-			for(int i=0;i<throughput;++i) {
-				uint32_t tmp_nonce = n++;
-				data[nxt][(block_header_size/4)*i + (block_header_size/4 - 1)] = bswap_32x4(tmp_nonce);
+				applog(LOG_DEBUG,
+						"TACA => scanhash_scrypt_jane[%d], BEFORE scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+						thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
+						nonce[cur], nonce[nxt]);
+				free(target_str);
+				free(hash_cur_str);
+				free(hash_nxt_str);
 			}
+		}
 
-			for(int i=0;i<throughput;++i)
-				scrypt_pbkdf2_1(
-						(unsigned char*) &data[nxt][(block_header_size / 4) * i],
-						block_header_size,
-						(unsigned char*) &data[nxt][(block_header_size / 4) * i],
-						block_header_size, Xbuf[nxt].ptr + 128 * i, 128);
-
-			memcpy(cuda_X[nxt], Xbuf[nxt].ptr, 128 * throughput);
-			cuda_scrypt_serialize(thr_id, nxt);
-			cuda_scrypt_HtoD(thr_id, cuda_X[nxt], nxt);
-			cuda_scrypt_core(thr_id, nxt, N);
-			cuda_scrypt_done(thr_id, nxt);
-
-			cuda_scrypt_DtoH(thr_id, cuda_X[nxt], nxt, false);
-
-			//cuda_scrypt_flush(thr_id, nxt);
-			if(!cuda_scrypt_sync(thr_id, nxt)) {
-				break;
-			}
-
-			memcpy(Xbuf[cur].ptr, cuda_X[cur], 128 * throughput);
-			for(int i=0;i<throughput;++i)
-				scrypt_pbkdf2_1(
-						(unsigned char*) &data[cur][(block_header_size / 4) * i],
-						block_header_size, Xbuf[cur].ptr + 128 * i, 128,
-						(unsigned char*) (&hash[cur][8 * i]), 32);
-
-#define VERIFY_ALL 0
-#if VERIFY_ALL
-			{
-				/* 2: X = ROMix(X) */
-				for(int i=0;i<throughput;++i)
-					scrypt_ROMix_1((scrypt_mix_word_t *)(Xbuf[cur].ptr + 128 * i), (scrypt_mix_word_t *)Ybuf.ptr, (scrypt_mix_word_t *)Vbuf.ptr, N);
-
-				unsigned int err = 0;
-				for(int i=0;i<throughput;++i) {
-					unsigned char *ref = (Xbuf[cur].ptr + 128 * i);
-					unsigned char *dat = (unsigned char*)(cuda_X[cur] + 32 * i);
-					if (memcmp(ref, dat, 128) != 0)
-					{
-						err++;
-#if 0
-						uint32_t *ref32 = (uint32_t*) ref;
-						uint32_t *dat32 = (uint32_t*) dat;
-						for (int j=0; j<32; ++j) {
-							if (ref32[j] != dat32[j])
-							fprintf(stderr, "ref32[i=%d][j=%d] = $%08x / $%08x\n", i, j, ref32[j], dat32[j]);
-						}
-#endif
-					}
-				}
-				if (err > 0) fprintf(stderr, "%d out of %d hashes differ.\n", err, throughput);
-			}
-#endif
-		} else {
-
-			// all on gpu
-
-			n += throughput;
-			if (opt_debug)
-				applog(LOG_DEBUG, "GPU #%d: n=%u, max_nonce = %u", device_map[thr_id], n, max_nonce);
-
-		    if (opt_debug)
-		    {
-				for (int i = 0; iteration > 0 && i < throughput; i++) {
-					char *target_str = get_target_string(ptarget);
-					char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
-					char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
-
-					applog(LOG_DEBUG,
-							"TACA => scanhash_scrypt_jane[%d], BEFORE scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
-							thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
-							nonce[cur], nonce[nxt]);
-					free(target_str);
-					free(hash_cur_str);
-					free(hash_nxt_str);
-				}
-		    }
-
-			cuda_scrypt_serialize(thr_id, nxt);
-			pre_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
-			
-			// Measure cuda_scrypt_core execution time
-			static __thread cudaEvent_t timing_start = NULL;
-			static __thread cudaEvent_t timing_end = NULL;
-			static __thread bool timing_initialized = false;
-			
-			if (!timing_initialized) {
-				cudaError_t err1 = cudaEventCreate(&timing_start);
-				cudaError_t err2 = cudaEventCreate(&timing_end);
-				if (err1 != cudaSuccess || err2 != cudaSuccess) {
-					gpulog(LOG_WARNING, thr_id, "Failed to create CUDA events for timing");
-				} else {
-					timing_initialized = true;
-				}
-			}
-			
-			if (timing_initialized && context_streams[nxt].find(thr_id) != context_streams[nxt].end()) {
-				cudaEventRecord(timing_start, context_streams[nxt][thr_id]);
-				cuda_scrypt_core(thr_id, nxt, N);
-				cudaEventRecord(timing_end, context_streams[nxt][thr_id]);
-				cudaEventSynchronize(timing_end);
-				
-				float elapsed_ms = 0.0f;
-				cudaError_t err = cudaEventElapsedTime(&elapsed_ms, timing_start, timing_end);
-				if (err == cudaSuccess) {
-					// Calculate H/s: throughput / elapsed_ms * 1000 (convert ms to seconds)
-					float hashes_per_sec = (elapsed_ms > 0.0f) ? (throughput / elapsed_ms * 1000.0f) : 0.0f;
-					// Log timing information
-					applog(LOG_INFO, "GPU #%d: cuda_scrypt_core execution time: %.3f ms (total hashes=%u, iteration=%d, H/s=%.2f)", 
-							device_map[thr_id], elapsed_ms, throughput, iteration, hashes_per_sec);
-				}
+		cuda_scrypt_serialize(thr_id, nxt);
+		pre_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
+		
+		// Measure cuda_scrypt_core execution time
+		static __thread cudaEvent_t timing_start = NULL;
+		static __thread cudaEvent_t timing_end = NULL;
+		static __thread bool timing_initialized = false;
+		
+		if (!timing_initialized) {
+			cudaError_t err1 = cudaEventCreate(&timing_start);
+			cudaError_t err2 = cudaEventCreate(&timing_end);
+			if (err1 != cudaSuccess || err2 != cudaSuccess) {
+				gpulog(LOG_WARNING, thr_id, "Failed to create CUDA events for timing");
 			} else {
-				// Fallback: execute without timing if events not available
-				cuda_scrypt_core(thr_id, nxt, N);
+				timing_initialized = true;
 			}
+		}
+		
+		if (timing_initialized && context_streams[nxt].find(thr_id) != context_streams[nxt].end()) {
+			cudaEventRecord(timing_start, context_streams[nxt][thr_id]);
+			cuda_scrypt_core(thr_id, nxt, N);
+			cudaEventRecord(timing_end, context_streams[nxt][thr_id]);
+			cudaEventSynchronize(timing_end);
 			
-			//cuda_scrypt_flush(thr_id, nxt);
-			if (!cuda_scrypt_sync(thr_id, nxt)) {
-				break;
+			float elapsed_ms = 0.0f;
+			cudaError_t err = cudaEventElapsedTime(&elapsed_ms, timing_start, timing_end);
+			if (err == cudaSuccess) {
+				// Calculate H/s: throughput / elapsed_ms * 1000 (convert ms to seconds)
+				float hashes_per_sec = (elapsed_ms > 0.0f) ? (throughput / elapsed_ms * 1000.0f) : 0.0f;
+				// Log timing information
+				applog(LOG_INFO, "GPU #%d: cuda_scrypt_core execution time: %.3f ms (total hashes=%u, iteration=%d, H/s=%.2f)", 
+						device_map[thr_id], elapsed_ms, throughput, iteration, hashes_per_sec);
 			}
+		} else {
+			// Fallback: execute without timing if events not available
+			cuda_scrypt_core(thr_id, nxt, N);
+		}
+		
+		//cuda_scrypt_flush(thr_id, nxt);
+		if (!cuda_scrypt_sync(thr_id, nxt)) {
+			break;
+		}
 
-			post_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
-			cuda_scrypt_done(thr_id, nxt);
+		post_keccak512(thr_id, nxt, nonce[nxt], throughput, block_header_size);
+		cuda_scrypt_done(thr_id, nxt);
 
-			cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
+		cuda_scrypt_DtoH(thr_id, hash[nxt], nxt, true);
 
-		    if (opt_debug)
-		    {
-				for (int i=0; iteration > 0 && i<throughput; i++)
-				{
-					char *target_str = get_target_string(ptarget);
-					char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
-					char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
+		if (opt_debug)
+		{
+			for (int i=0; iteration > 0 && i<throughput; i++)
+			{
+				char *target_str = get_target_string(ptarget);
+				char *hash_cur_str = get_target_string(&hash[cur][8 * i]);
+				char *hash_nxt_str = get_target_string(&hash[nxt][8 * i]);
 
-					applog(LOG_DEBUG,
-							"TACA => scanhash_scrypt_jane[%d], AFTER scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
-							thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
-							nonce[cur], nonce[nxt]);
-					free(target_str);
-					free(hash_cur_str);
-					free(hash_nxt_str);
-				}
-		    }
-			//cuda_scrypt_flush(thr_id, nxt); // made by cuda_scrypt_sync
-			if (!cuda_scrypt_sync(thr_id, nxt)) {
-				break;
+				applog(LOG_DEBUG,
+						"TACA => scanhash_scrypt_jane[%d], AFTER scan hash, i = %d, hash[cur][8*i] = %s, hash[nxt][8*i] = %s, Htarg = %x, nonce[cur] = %u, nonce[nxt] = %u",
+						thr_id, i, hash_cur_str, hash_nxt_str, Htarg,
+						nonce[cur], nonce[nxt]);
+				free(target_str);
+				free(hash_cur_str);
+				free(hash_nxt_str);
 			}
+		}
+		//cuda_scrypt_flush(thr_id, nxt); // made by cuda_scrypt_sync
+		if (!cuda_scrypt_sync(thr_id, nxt)) {
+			break;
 		}
 
 		for (int i=0; iteration > 0 && i<throughput; i++)
