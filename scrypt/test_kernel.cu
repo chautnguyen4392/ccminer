@@ -45,7 +45,7 @@ __constant__ uint32_t c_SCRATCH_WU_PER_WARP_1; // (SCRATCH * WU_PER_WARP) - 1
 texture<uint4, 1, cudaReadModeElementType> texRef1D_4_V;
 texture<uint4, 2, cudaReadModeElementType> texRef2D_4_V;
 
-template <int ALGO> __device__  __forceinline__ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3);
+__device__  __forceinline__ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3);
 
 static __device__ uint4& operator^=(uint4& left, const uint4& right) {
 	left.x ^= right.x;
@@ -282,124 +282,17 @@ void store_key_chacha(uint32_t *B, const uint4 &b, const uint4 &bx)
 }
 
 
-template <int ALGO> __device__  __forceinline__
+__device__  __forceinline__
 void load_key(const uint32_t *B, uint4 &b, uint4 &bx)
 {
-	switch(ALGO) {
-	case A_SCRYPT:      load_key_salsa(B, b, bx); break;
-	case A_SCRYPT_JANE: load_key_chacha(B, b, bx); break;
-	}
+	load_key_chacha(B, b, bx);
 }
-
-template <int ALGO> __device__  __forceinline__
-void store_key(uint32_t *B, uint4 &b, uint4 &bx)
-{
-	switch(ALGO) {
-	case A_SCRYPT:      store_key_salsa(B, b, bx); break;
-	case A_SCRYPT_JANE: store_key_chacha(B, b, bx); break;
-	}
-}
-
-
-/*
- * salsa_xor_core (Salsa20/8 cypher)
- * The original scrypt called:
- * xor_salsa8(&X[0], &X[16]); <-- the "b" loop
- * xor_salsa8(&X[16], &X[0]); <-- the "bx" loop
- * This version is unrolled to handle both of these loops in a single
- * call to avoid unnecessary data movement.
- */
-
-#define XOR_ROTATE_ADD(dst, s1, s2, amt) { uint32_t tmp = s1+s2; dst ^= ((tmp<<amt)|(tmp>>(32-amt))); }
 
 __device__  __forceinline__
-void salsa_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
+void store_key(uint32_t *B, uint4 &b, uint4 &bx)
 {
-	extern __shared__ unsigned char shared[];
-	uint32_t (*tmp)[32+1] = (uint32_t (*)[32+1])(shared);
-	unsigned int wrp  = threadIdx.x/32, lane = threadIdx.x%32;
-	uint32_t *s = &tmp[wrp][lane];
-	uint32_t *s1 = &tmp[wrp][x1];
-	uint32_t *s2 = &tmp[wrp][x2];
-	uint32_t *s3 = &tmp[wrp][x3];
-
-	uint4 x;
-
-	b ^= bx;
-	x = b;
-
-	// Enter in "primary order" (t0 has  0,  4,  8, 12)
-	//                          (t1 has  5,  9, 13,  1)
-	//                          (t2 has 10, 14,  2,  6)
-	//                          (t3 has 15,  3,  7, 11)
-
-	#pragma unroll
-	for (int j = 0; j < 4; j++) {
-
-		// Mixing phase of salsa
-		XOR_ROTATE_ADD(x.y, x.x, x.w, 7);
-		XOR_ROTATE_ADD(x.z, x.y, x.x, 9);
-		XOR_ROTATE_ADD(x.w, x.z, x.y, 13);
-		XOR_ROTATE_ADD(x.x, x.w, x.z, 18);
-
-		/* Transpose rows and columns. */
-		/* Unclear if this optimization is needed: These are ordered based
-		 * upon the dependencies needed in the later xors. Compiler should be
-		 * able to figure this out, but might as well give it a hand. */
-		*s = x.y; x.y = *s3;
-		*s = x.w; x.w = *s1;
-		*s = x.z; x.z = *s2;
-
-		/* The next XOR_ROTATE_ADDS could be written to be a copy-paste of the first,
-		 * but the register targets are rewritten here to swap x[1] and x[3] so that
-		 * they can be directly shuffled to and from our peer threads without
-		 * reassignment. The reverse shuffle then puts them back in the right place.
-		 */
-
-		XOR_ROTATE_ADD(x.w, x.x, x.y, 7);
-		XOR_ROTATE_ADD(x.z, x.w, x.x, 9);
-		XOR_ROTATE_ADD(x.y, x.z, x.w, 13);
-		XOR_ROTATE_ADD(x.x, x.y, x.z, 18);
-
-		*s = x.w; x.w = *s3;
-		*s = x.y; x.y = *s1;
-		*s = x.z; x.z = *s2;
-	}
-
-	b += x;
-	// The next two lines are the beginning of the BX-centric loop iteration
-	bx ^= b;
-	x = bx;
-
-	// This is a copy of the same loop above, identical but stripped of comments.
-	// Duplicated so that we can complete a bx-based loop with fewer register moves.
-	#pragma unroll
-	for (int j = 0; j < 4; j++) {
-		XOR_ROTATE_ADD(x.y, x.x, x.w, 7);
-		XOR_ROTATE_ADD(x.z, x.y, x.x, 9);
-		XOR_ROTATE_ADD(x.w, x.z, x.y, 13);
-		XOR_ROTATE_ADD(x.x, x.w, x.z, 18);
-
-		*s = x.y; x.y = *s3;
-		*s = x.w; x.w = *s1;
-		*s = x.z; x.z = *s2;
-
-		XOR_ROTATE_ADD(x.w, x.x, x.y, 7);
-		XOR_ROTATE_ADD(x.z, x.w, x.x, 9);
-		XOR_ROTATE_ADD(x.y, x.z, x.w, 13);
-		XOR_ROTATE_ADD(x.x, x.y, x.z, 18);
-
-		*s = x.w; x.w = *s3;
-		*s = x.y; x.y = *s1;
-		*s = x.z; x.z = *s2;
-	}
-
-	// At the end of these iterations, the data is in primary order again.
-#undef XOR_ROTATE_ADD
-
-	bx += x;
+	store_key_chacha(B, b, bx);
 }
-
 
 /*
  * chacha_xor_core (ChaCha20/8 cypher)
@@ -492,13 +385,10 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 	bx += x;
 }
 
-template <int ALGO> __device__  __forceinline__
+__device__  __forceinline__
 void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
 {
-	switch(ALGO) {
-	case A_SCRYPT:      salsa_xor_core(b, bx, x1, x2, x3); break;
-	case A_SCRYPT_JANE: chacha_xor_core(b, bx, x1, x2, x3); break;
-	}
+	chacha_xor_core(b, bx, x1, x2, x3);
 }
 
 
@@ -522,7 +412,7 @@ void block_mixer(uint4 &b, uint4 &bx, const int x1, const int x2, const int x3)
  * and similarly for kx.
  */
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+template <MemoryAccess SCHEME> __global__
 void test_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 {
 	uint4 b, bx;
@@ -537,19 +427,19 @@ void test_scrypt_core_kernelA(const uint32_t *d_idata, int begin, int end)
 	int i=begin;
 
 	if (i == 0) {
-		load_key<ALGO>(d_idata, b, bx);
+		load_key(d_idata, b, bx);
 		write_keys_direct<SCHEME>(b, bx, start);
 		++i;
 	} else read_keys_direct<SCHEME,0>(b, bx, start+32*(i-1));
 
 	while (i < end) {
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 		write_keys_direct<SCHEME>(b, bx, start+32*i);
 		++i;
 	}
 }
 
-template <int ALGO, MemoryAccess SCHEME> __global__
+template <MemoryAccess SCHEME> __global__
 void test_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	uint4 b, bx;
@@ -564,17 +454,17 @@ void test_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, un
 	int i=begin;
 
 	if (i == 0) {
-		load_key<ALGO>(d_idata, b, bx);
+		load_key(d_idata, b, bx);
 		write_keys_direct<SCHEME>(b, bx, start);
 		++i;
 	} else {
 		int pos = (i-1)/LOOKUP_GAP, loop = (i-1)-pos*LOOKUP_GAP;
 		read_keys_direct<SCHEME,0>(b, bx, start+32*pos);
-		while(loop--) block_mixer<ALGO>(b, bx, x1, x2, x3);
+		while(loop--) block_mixer(b, bx, x1, x2, x3);
 	}
 
 	while (i < end) {
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 		if (i % LOOKUP_GAP == 0)
 			write_keys_direct<SCHEME>(b, bx, start+32*(i/LOOKUP_GAP));
 		++i;
@@ -588,7 +478,7 @@ void test_scrypt_core_kernelA_LG(const uint32_t *d_idata, int begin, int end, un
  * the scratch buffer in pseudorandom order, mixing the key as it goes.
  */
 
-template <int ALGO, MemoryAccess SCHEME, int TEX_DIM> __global__
+template <MemoryAccess SCHEME, int TEX_DIM> __global__
 void test_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 {
 	extern __shared__ unsigned char shared[];
@@ -606,21 +496,21 @@ void test_scrypt_core_kernelB(uint32_t *d_odata, int begin, int end)
 
 	if (begin == 0) {
 		read_keys_direct<SCHEME,TEX_DIM>(b, bx, start+32*c_N_1);
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
-	} else load_key<ALGO>(d_odata, b, bx);
+		block_mixer(b, bx, x1, x2, x3);
+	} else load_key(d_odata, b, bx);
 
 	for (int i = begin; i < end; i++) {
 		tmp[threadIdx.x/32][threadIdx.x%32] = bx.x;
 		int j = (tmp[threadIdx.x/32][(threadIdx.x & 0x1c)] & (c_N_1));
 		uint4 t, tx; read_keys_direct<SCHEME,TEX_DIM>(t, tx, start+32*j);
 		b ^= t; bx ^= tx;
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 	}
 
-	store_key<ALGO>(d_odata, b, bx);
+	store_key(d_odata, b, bx);
 }
 
-template <int ALGO, MemoryAccess SCHEME, int TEX_DIM> __global__
+template <MemoryAccess SCHEME, int TEX_DIM> __global__
 void test_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsigned int LOOKUP_GAP)
 {
 	extern __shared__ unsigned char shared[];
@@ -639,20 +529,20 @@ void test_scrypt_core_kernelB_LG(uint32_t *d_odata, int begin, int end, unsigned
 	if (begin == 0) {
 		int pos = c_N_1/LOOKUP_GAP, loop = 1 + (c_N_1-pos*LOOKUP_GAP);
 		read_keys_direct<SCHEME,TEX_DIM>(b, bx, start+32*pos);
-		while(loop--) block_mixer<ALGO>(b, bx, x1, x2, x3);
-	} else load_key<ALGO>(d_odata, b, bx);
+		while(loop--) block_mixer(b, bx, x1, x2, x3);
+	} else load_key(d_odata, b, bx);
 
 	for (int i = begin; i < end; i++) {
 		tmp[threadIdx.x/32][threadIdx.x%32] = bx.x;
 		int j = (tmp[threadIdx.x/32][(threadIdx.x & 0x1c)] & (c_N_1));
 		int pos = j/LOOKUP_GAP, loop = j-pos*LOOKUP_GAP;
 		uint4 t, tx; read_keys_direct<SCHEME,TEX_DIM>(t, tx, start+32*pos);
-		while(loop--) block_mixer<ALGO>(t, tx, x1, x2, x3);
+		while(loop--) block_mixer(t, tx, x1, x2, x3);
 		b ^= t; bx ^= tx;
-		block_mixer<ALGO>(b, bx, x1, x2, x3);
+		block_mixer(b, bx, x1, x2, x3);
 	}
 
-	store_key<ALGO>(d_odata, b, bx);
+	store_key(d_odata, b, bx);
 }
 
 
@@ -734,11 +624,9 @@ bool TestKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int th
 	unsigned int pos = 0;
 	do {
 		if (LOOKUP_GAP == 1) {
-			if (IS_SCRYPT())      test_scrypt_core_kernelA<A_SCRYPT,    ANDERSEN> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N));
-			if (IS_SCRYPT_JANE()) test_scrypt_core_kernelA<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N));
+			test_scrypt_core_kernelA<SIMPLE> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N));
 		} else {
-			if (IS_SCRYPT())      test_scrypt_core_kernelA_LG<A_SCRYPT,    ANDERSEN> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (IS_SCRYPT_JANE())	test_scrypt_core_kernelA_LG<A_SCRYPT_JANE, SIMPLE> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
+			test_scrypt_core_kernelA_LG<SIMPLE> <<< grid, threads, shared, stream >>>(d_idata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 		pos += batch;
 	} while (pos < N);
@@ -747,11 +635,9 @@ bool TestKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int th
 	pos = 0;
 	do {
 		if (LOOKUP_GAP == 1) {
-			if (IS_SCRYPT())      test_scrypt_core_kernelB<A_SCRYPT,    ANDERSEN, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N));
-			if (IS_SCRYPT_JANE()) test_scrypt_core_kernelB<A_SCRYPT_JANE, SIMPLE, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N));
+			test_scrypt_core_kernelB<SIMPLE, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N));
 		} else {
-			if (IS_SCRYPT())      test_scrypt_core_kernelB_LG<A_SCRYPT,    ANDERSEN, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
-			if (IS_SCRYPT_JANE()) test_scrypt_core_kernelB_LG<A_SCRYPT_JANE, SIMPLE, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
+			test_scrypt_core_kernelB_LG<SIMPLE, 0><<< grid, threads, shared, stream >>>(d_odata, pos, min(pos+batch, N), LOOKUP_GAP);
 		}
 
 		pos += batch;

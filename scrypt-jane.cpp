@@ -21,6 +21,9 @@
 // External CUDA stream for timing
 extern std::map<int, cudaStream_t> context_streams[2];
 
+// External parallel mode variable (defined in ccminer.cpp)
+extern int parallel;
+
 #define scrypt_maxN 30  /* (1 << (30 + 1)) = ~2 billion */
 #define scrypt_r_32kb 8 /* (1 << 8) = 256 * 2 blocks in a chunk * 64 bytes = Max of 32kb in a chunk */
 #define scrypt_maxr scrypt_r_32kb /* 32kb */

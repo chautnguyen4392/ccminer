@@ -56,8 +56,6 @@ void NV2Kernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 
 bool NV2Kernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
-	if (!IS_SCRYPT_JANE())
-		return false;
 
 	// make some constants available to kernel, update only initially and when changing
 	static uint32_t prev_N[MAX_GPUS] = { 0 };
