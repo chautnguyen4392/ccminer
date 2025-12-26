@@ -426,7 +426,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 	//                        (t2 has 2, 6, 10, 14)
 	//                        (t3 has 3, 7, 11, 15)
 
-	//#pragma unroll
+	#pragma unroll
 	for (int j = 0; j < 4; j++) {
 
 		// Column Mixing phase of chacha
@@ -455,7 +455,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 	bx ^= b;
 	x = bx;
 
-	//#pragma unroll
+	#pragma unroll
 	for (int j = 0; j < 4; j++) 
 	{
 
