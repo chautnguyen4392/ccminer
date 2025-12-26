@@ -136,14 +136,14 @@ AM_CONDITIONAL([HAVE_NVML], [test -n "$with_nvml"])
 
 dnl CUDA architecture options
 AC_ARG_ENABLE([gen75],
-   [AS_HELP_STRING([--enable-gen75], [enable CUDA compute capability 7.5 (Turing) support])],
+   [AS_HELP_STRING([--disable-gen75], [disable CUDA compute capability 7.5 (Turing) support @<:@default=enabled@:>@])],
    [enable_gen75=$enableval],
-   [enable_gen75=no])
+   [enable_gen75=yes])
 
 AC_ARG_ENABLE([gen86],
-   [AS_HELP_STRING([--enable-gen86], [enable CUDA compute capability 8.6 (Ampere) support])],
+   [AS_HELP_STRING([--disable-gen86], [disable CUDA compute capability 8.6 (Ampere) support @<:@default=enabled@:>@])],
    [enable_gen86=$enableval],
-   [enable_gen86=no])
+   [enable_gen86=yes])
 
 AM_CONDITIONAL([WANT_GEN75], [test x$enable_gen75 = xyes])
 AM_CONDITIONAL([WANT_GEN86], [test x$enable_gen86 = xyes])
