@@ -1,20 +1,20 @@
-#ifndef NV2_KERNEL_H
-#define NV2_KERNEL_H
+#ifndef VOLTA_KERNEL_H
+#define VOLTA_KERNEL_H
 
 #include "miner.h"
 #include <cuda_runtime.h>
 
 #include "salsa_kernel.h"
 
-class NV2Kernel : public KernelInterface
+class VoltaKernel : public KernelInterface
 {
 public:
-	NV2Kernel();
+	VoltaKernel();
 
 	virtual void set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V);
 	virtual bool run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark);
 
-	virtual char get_identifier() { return 'T'; };
+	virtual char get_identifier() { return 'V'; };
 	virtual int get_major_version() { return 3; };
 	virtual int get_minor_version() { return 5; };
 
@@ -30,4 +30,4 @@ public:
 	virtual int get_threads_per_warp() { return THREADS_PER_WARP; }
 };
 
-#endif // #ifndef NV2_KERNEL_H
+#endif // #ifndef VOLTA_KERNEL_H

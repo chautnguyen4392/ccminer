@@ -14,7 +14,7 @@
 #include "miner.h"
 
 #include "salsa_kernel.h"
-#include "titan_kernel.h"
+#include "pascal_kernel.h"
 
 #define THREADS_PER_WU 4  // four threads per hash
 
@@ -287,7 +287,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  */
 
  __global__
- void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
+ void pascal_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
  {
 	 // Copy from constant memory c_V to shared memory s_V for this block's warps
 	 int warp_id = threadIdx.x / THREADS_PER_WARP;
@@ -344,7 +344,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  */
 
 __global__
-void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
+void pascal_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
 {
 	// Copy from constant memory c_V to shared memory s_V for this block's warps
 	int warp_id = threadIdx.x / THREADS_PER_WARP;
@@ -403,16 +403,16 @@ void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned in
 }
 
 
-TitanKernel::TitanKernel() : KernelInterface()
+PascalKernel::PascalKernel() : KernelInterface()
 {
 }
 
-void TitanKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
+void PascalKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 {
 	checkCudaErrors(cudaMemcpyToSymbol(c_V, h_V, MAXWARPS*sizeof(uint32_t*), 0, cudaMemcpyHostToDevice));
 }
 
-bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream,
+bool PascalKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream,
 	uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
 	bool success = true;
@@ -440,10 +440,10 @@ bool TitanKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int t
 	size_t shared_mem_size = WARPS_PER_BLOCK * sizeof(uint32_t*);
 
 	// First phase: Sequential writes to scratchpad.
-	titan_scrypt_core_kernelA_LG <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
+	pascal_scrypt_core_kernelA_LG <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
 
 	// Second phase: Random read access from scratchpad.
-	titan_scrypt_core_kernelB_LG <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
+	pascal_scrypt_core_kernelB_LG <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
 
 	return success;
 }

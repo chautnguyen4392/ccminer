@@ -13,12 +13,8 @@
 
 #include "salsa_kernel.h"
 
-#include "nv_kernel2.h"
-#include "titan_kernel.h"
-#include "nv_kernel.h"
-#include "kepler_kernel.h"
-#include "fermi_kernel.h"
-#include "test_kernel.h"
+#include "volta_kernel.h"
+#include "pascal_kernel.h"
 
 #include "miner.h"
 
@@ -55,27 +51,17 @@ uint32_t  h_V_extra[MAX_GPUS][TOTAL_WARP_LIMIT*64];    //       with really larg
 KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
 {
 	KernelInterface *kernel = NULL;
-	uint64_t N = 1UL << (opt_nfactor+1);
 
-	if (N <= 8192)
+	// Select kernel based on compute capability
+	if (props->major >= 7)
 	{
-		// low N-factor scrypt-jane = high register count kernels
-		if (props->major > 3 || (props->major == 3 && props->minor >= 5))
-			kernel = new NV2Kernel(); // we don't want this for Keccak though
-		else if (props->major == 3 && props->minor == 0)
-			kernel = new NVKernel();
-		else
-			kernel = new FermiKernel();
+		// For compute capability >= 7.0, use VoltaKernel
+		kernel = new VoltaKernel();
 	}
 	else
 	{
-		// high N-factor scrypt-jane = low register count kernels
-		if (props->major > 3 || (props->major == 3 && props->minor >= 5))
-			kernel = new TitanKernel();
-		else if (props->major == 3 && props->minor == 0)
-			kernel = new KeplerKernel();
-		else
-			kernel = new TestKernel();
+		// For compute capability < 7.0, use PascalKernel
+		kernel = new PascalKernel();
 	}
 	return kernel;
 }
@@ -87,9 +73,8 @@ bool validate_config(char *config, int &b, int &w, KernelInterface **kernel = NU
 	char kernelid = ' ';
 	if (config != NULL)
 	{
-		if (config[0] == 'T' || config[0] == 'K' || config[0] == 'F' || config[0] == 'L' ||
-			config[0] == 't' || config[0] == 'k' || config[0] == 'f' ||
-			config[0] == 'Z' || config[0] == 'Y' || config[0] == 'X') {
+		if (config[0] == 'V' || config[0] == 'T' || config[0] == 'v' ||
+			config[0] == 'P' || config[0] == 't' || config[0] == 'p') {
 			kernelid = config[0];
 			config++;
 		}
@@ -102,12 +87,10 @@ bool validate_config(char *config, int &b, int &w, KernelInterface **kernel = NU
 		{
 			switch (kernelid)
 			{
-				case 'T': case 'Z': *kernel = new NV2Kernel(); break;
-				case 't':           *kernel = new TitanKernel(); break;
-				case 'K': case 'Y': *kernel = new NVKernel(); break;
-				case 'k':           *kernel = new KeplerKernel(); break;
-				case 'F': case 'L': *kernel = new FermiKernel(); break;
-				case 'f': case 'X': *kernel = new TestKernel(); break;
+				case 'V': case 'T': case 'v': // VoltaKernel identifiers
+					*kernel = new VoltaKernel(); break;
+				case 'P': case 't': case 'p': // PascalKernel identifiers
+					*kernel = new PascalKernel(); break;
 				case ' ': // choose based on device architecture
 					*kernel = Best_Kernel_Heuristics(props);
 				break;
@@ -286,18 +269,10 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	if (!validate_config(device_config[thr_id], optimal_blocks, WARPS_PER_BLOCK, &kernel, &props)) {
 		kernel = NULL;
 		if (device_config[thr_id] != NULL) {
-				 if (device_config[thr_id][0] == 'T' || device_config[thr_id][0] == 'Z')
-				kernel = new NV2Kernel();
-			else if (device_config[thr_id][0] == 't')
-				kernel = new TitanKernel();
-			else if (device_config[thr_id][0] == 'K' || device_config[thr_id][0] == 'Y')
-				kernel = new NVKernel();
-			else if (device_config[thr_id][0] == 'k')
-				kernel = new KeplerKernel();
-			else if (device_config[thr_id][0] == 'F' || device_config[thr_id][0] == 'L')
-				kernel = new FermiKernel();
-			else if (device_config[thr_id][0] == 'f' || device_config[thr_id][0] == 'X')
-				kernel = new TestKernel();
+			if (device_config[thr_id][0] == 'V' || device_config[thr_id][0] == 'T' || device_config[thr_id][0] == 'v')
+				kernel = new VoltaKernel();
+			else if (device_config[thr_id][0] == 'P' || device_config[thr_id][0] == 't' || device_config[thr_id][0] == 'p')
+				kernel = new PascalKernel();
 		}
 		if (kernel == NULL) kernel = Best_Kernel_Heuristics(&props);
 	}

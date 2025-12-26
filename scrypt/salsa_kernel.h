@@ -76,7 +76,7 @@ public:
 
 // Define work unit size
 // threads per warp for tunable granularity (can be 8, 16, 24, or 32)
-// This allows tuning the work unit granularity for certain kernels (e.g., NV2Kernel, TitanKernel)
+// This allows tuning the work unit granularity for certain kernels (e.g., VoltaKernel, PascalKernel)
 // Set via -DTHREADS_PER_WARP=N at compile time, defaults to 16
 #ifndef THREADS_PER_WARP
 #define THREADS_PER_WARP 16
