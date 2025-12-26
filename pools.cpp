@@ -213,18 +213,15 @@ bool pool_switch(int thr_id, int pooln)
 	// todo: barrier required to free algo resources
 	if (p->algo != (int) opt_algo) {
 
-		if (opt_algo != ALGO_AUTO) {
+		algo_switch = true;
 
-			algo_switch = true;
-
-			pthread_mutex_lock(&stats_lock);
-			for (int n=0; n<opt_n_threads; n++)
-				thr_hashrates[n] = 0.;
-			stats_purge_all();
-			if (check_dups)
-				hashlog_purge_all();
-			pthread_mutex_unlock(&stats_lock);
-		}
+		pthread_mutex_lock(&stats_lock);
+		for (int n=0; n<opt_n_threads; n++)
+			thr_hashrates[n] = 0.;
+		stats_purge_all();
+		if (check_dups)
+			hashlog_purge_all();
+		pthread_mutex_unlock(&stats_lock);
 
 		opt_algo = (enum sha_algos) p->algo;
 	}
@@ -254,8 +251,7 @@ bool pool_switch(int thr_id, int pooln)
 			// temporary... until stratum code cleanup
 			stratum = p->stratum;
 			stratum.pooln = cur_pooln;
-			stratum.rpc2 = (p->algo == ALGO_WILDKECCAK || p->algo == ALGO_CRYPTONIGHT);
-			stratum.rpc2 |= p->algo == ALGO_CRYPTOLIGHT;
+			stratum.rpc2 = false; // scrypt-jane only
 
 			// unlock the stratum thread
 			tq_push(thr_info[stratum_thr_id].q, strdup(rpc_url));
@@ -278,8 +274,7 @@ bool pool_switch(int thr_id, int pooln)
 
 	}
 
-	stratum.rpc2 = (p->algo == ALGO_WILDKECCAK || p->algo == ALGO_CRYPTONIGHT);
-	stratum.rpc2 |= p->algo == ALGO_CRYPTOLIGHT;
+	stratum.rpc2 = false; // scrypt-jane only
 
 	return true;
 }
