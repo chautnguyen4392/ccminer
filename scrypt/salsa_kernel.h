@@ -25,6 +25,10 @@ extern char *device_name[MAX_GPUS];
 extern int opt_nfactor;
 extern char *jane_params;
 extern int opt_reserve_vram;
+extern bool opt_use_system_ram;
+extern int opt_reserve_ram;
+extern int opt_n_threads;
+extern int cuda_num_devices(void);
 
 typedef unsigned int uint32_t; // define this as 32 bit type derived from int
 
