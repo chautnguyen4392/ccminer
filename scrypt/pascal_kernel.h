@@ -13,7 +13,7 @@ public:
 
 	virtual char get_identifier() { return 'P'; }
 	virtual int get_major_version() { return 3; }
-	virtual int get_minor_version() { return 5; }
+	virtual int get_minor_version() { return 0; }
 
 	virtual int max_warps_per_block() { return 32; }
 	virtual int get_texel_width() { return 4; }

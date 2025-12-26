@@ -16,6 +16,9 @@
 #include "salsa_kernel.h"
 #include "pascal_kernel.h"
 
+// External reference to device_threads_per_warp
+extern int device_threads_per_warp[MAX_GPUS];
+
 #define THREADS_PER_WU 4  // four threads per hash
 
 #if __CUDA_ARCH__ < 320
@@ -108,6 +111,7 @@ void stcg_uint4(uint4* ptr, const uint4 &v)
     asm volatile ("st.cg.global.u32 [%0], %1;" :: "l"((unsigned long long)(p+3)), "r"(v.w));
 }
 
+template<unsigned int THREADS_PER_WARP>
 __device__ __forceinline__
 void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 {
@@ -116,6 +120,7 @@ void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 	stcg_uint4((uint4 *)(&scratch[start+16]), bx);
 }
 
+template<unsigned int THREADS_PER_WARP>
 __device__ __forceinline__
 void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
@@ -286,8 +291,9 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  * and similarly for kx.
  */
 
+ template<unsigned int THREADS_PER_WARP>
  __global__
- void pascal_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
+ void pascal_scrypt_core_kernelA_LG_template(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
  {
 	 // Copy from constant memory c_V to shared memory s_V for this block's warps
 	 int warp_id = threadIdx.x / THREADS_PER_WARP;
@@ -310,7 +316,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 		 return;
  
 	 load_key(d_idata, b, bx);
-	 write_keys_direct(b, bx, start);
+	 write_keys_direct<THREADS_PER_WARP>(b, bx, start);
  
 	 // Optimized loop: avoid checking i % LOOKUP_GAP on every iteration
 	 int remaining = iterations - 1;
@@ -326,7 +332,7 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
 			 chacha_xor_core(b, bx, x1, x2, x3);
 		 }
 		 // Write after processing this block
-		 write_keys_direct(b, bx, start+32*write_idx);
+		 write_keys_direct<THREADS_PER_WARP>(b, bx, start+32*write_idx);
 		 write_idx++;
 	 }
  
@@ -343,8 +349,9 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  * the scratch buffer in pseudorandom order, mixing the key as it goes.
  */
 
+template<unsigned int THREADS_PER_WARP>
 __global__
-void pascal_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
+void pascal_scrypt_core_kernelB_LG_template(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
 {
 	// Copy from constant memory c_V to shared memory s_V for this block's warps
 	int warp_id = threadIdx.x / THREADS_PER_WARP;
@@ -368,7 +375,7 @@ void pascal_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned i
 
 	int resume_pos = c_N_1/LOOKUP_GAP;
 	int resume_loop = 1 + (c_N_1 - resume_pos*LOOKUP_GAP);
-	read_keys_direct(b, bx, start+32*resume_pos);
+	read_keys_direct<THREADS_PER_WARP>(b, bx, start+32*resume_pos);
 	while (resume_loop--)
 		chacha_xor_core(b, bx, x1, x2, x3);
 
@@ -384,7 +391,7 @@ void pascal_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned i
 			j = (__shfl2((int)bx.x, (threadIdx.x & 0x1c)) & (c_N_1));
 			scratch_pos = j/LOOKUP_GAP;
 			loop = j - scratch_pos*LOOKUP_GAP;
-			read_keys_direct(t, tx, start+32*scratch_pos);
+			read_keys_direct<THREADS_PER_WARP>(t, tx, start+32*scratch_pos);
 		}
 		if (loop == 0) {
 			b ^= t; bx ^= tx;
@@ -419,8 +426,12 @@ bool PascalKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int 
 
 	// make some constants available to kernel, update only initially and when changing
 	static uint32_t prev_N[MAX_GPUS] = { 0 };
+	static uint32_t prev_threads_per_warp[MAX_GPUS] = { 0 };
 
-	if (N != prev_N[thr_id]) {
+	uint32_t threads_per_warp = device_threads_per_warp[thr_id];
+	unsigned int WU_PER_WARP = threads_per_warp / THREADS_PER_WU;
+
+	if (N != prev_N[thr_id] || threads_per_warp != prev_threads_per_warp[thr_id]) {
 		uint32_t h_N = N;
 		uint32_t h_N_1 = N-1;
 		uint32_t h_SCRATCH = SCRATCH;
@@ -434,16 +445,27 @@ bool PascalKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int 
 		cudaMemcpyToSymbolAsync(c_SCRATCH_WU_PER_WARP_1, &h_SCRATCH_WU_PER_WARP_1, sizeof(uint32_t), 0, cudaMemcpyHostToDevice, stream);
 
 		prev_N[thr_id] = N;
+		prev_threads_per_warp[thr_id] = threads_per_warp;
 	}
 
 	// Calculate shared memory size needed for pointer array (WARPS_PER_BLOCK pointers)
 	size_t shared_mem_size = WARPS_PER_BLOCK * sizeof(uint32_t*);
 
-	// First phase: Sequential writes to scratchpad.
-	pascal_scrypt_core_kernelA_LG <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
-
-	// Second phase: Random read access from scratchpad.
-	pascal_scrypt_core_kernelB_LG <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
+	// Dispatch to the appropriate compiled kernel version
+	if (threads_per_warp == 16) {
+		// First phase: Sequential writes to scratchpad.
+		pascal_scrypt_core_kernelA_LG_template<16> <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
+		// Second phase: Random read access from scratchpad.
+		pascal_scrypt_core_kernelB_LG_template<16> <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
+	} else if (threads_per_warp == 32) {
+		// First phase: Sequential writes to scratchpad.
+		pascal_scrypt_core_kernelA_LG_template<32> <<< grid, threads, shared_mem_size, stream >>>(d_idata, N, LOOKUP_GAP);
+		// Second phase: Random read access from scratchpad.
+		pascal_scrypt_core_kernelB_LG_template<32> <<< grid, threads, shared_mem_size, stream >>>(d_odata, N, LOOKUP_GAP);
+	} else {
+		applog(LOG_ERR, "GPU #%d: Unsupported THREADS_PER_WARP=%u (only 16 and 32 are supported)", device_map[thr_id], threads_per_warp);
+		return false;
+	}
 
 	return success;
 }

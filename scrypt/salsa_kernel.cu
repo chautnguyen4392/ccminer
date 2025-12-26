@@ -102,6 +102,10 @@ bool validate_config(char *config, int &b, int &w, KernelInterface **kernel = NU
 
 std::map<int, int> context_blocks;
 std::map<int, int> context_wpb;
+std::map<int, int> context_threads_per_warp;
+std::map<int, int> context_wu_per_warp;
+std::map<int, int> context_wu_per_block;
+std::map<int, int> context_wu_per_launch;
 std::map<int, bool> context_concurrent;
 std::map<int, KernelInterface *> context_kernel;
 std::map<int, uint32_t *> context_idata[2];
@@ -133,6 +137,12 @@ int cuda_throughput(int thr_id)
 			return 0;
 
 		unsigned int THREADS_PER_WU = kernel->threads_per_wu();
+		unsigned int THREADS_PER_WARP = device_threads_per_warp[thr_id];
+		if (THREADS_PER_WARP == 0) THREADS_PER_WARP = 32; // default to 32
+		unsigned int WU_PER_WARP = THREADS_PER_WARP / THREADS_PER_WU;
+		unsigned int WU_PER_BLOCK = WU_PER_WARP * WARPS_PER_BLOCK;
+		unsigned int WU_PER_LAUNCH = GRID_BLOCKS * WU_PER_BLOCK;
+		
 		unsigned int mem_size = WU_PER_LAUNCH * sizeof(uint32_t) * 32; // BLOCK DATA RECEIVED FROM YACOIND IS 128 BYTES
 		unsigned int state_size = WU_PER_LAUNCH * sizeof(uint32_t) * 8;
 
@@ -165,16 +175,18 @@ int cuda_throughput(int thr_id)
 		checkCudaErrors(cudaEventCreateWithFlags(&tmp4, cudaEventDisableTiming)); context_serialize[1][thr_id] = tmp4;
 		checkCudaErrors(cudaEventRecord(context_serialize[1][thr_id]));
 
+		// Store calculated values in context
 		context_kernel[thr_id] = kernel;
 		context_concurrent[thr_id] = concurrent;
 		context_blocks[thr_id] = GRID_BLOCKS;
 		context_wpb[thr_id] = WARPS_PER_BLOCK;
+		context_threads_per_warp[thr_id] = THREADS_PER_WARP;
+		context_wu_per_warp[thr_id] = WU_PER_WARP;
+		context_wu_per_block[thr_id] = WU_PER_BLOCK;
+		context_wu_per_launch[thr_id] = WU_PER_LAUNCH;
 	}
 
-	GRID_BLOCKS = context_blocks[thr_id];
-	WARPS_PER_BLOCK = context_wpb[thr_id];
-	unsigned int THREADS_PER_WU = context_kernel[thr_id]->threads_per_wu();
-	return WU_PER_LAUNCH;
+	return context_wu_per_launch[thr_id];
 }
 
 // Beginning of GPU Architecture definitions
@@ -301,6 +313,9 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 
 	// number of threads collaborating on one work unit (hash)
 	unsigned int THREADS_PER_WU = kernel->threads_per_wu();
+	unsigned int THREADS_PER_WARP = device_threads_per_warp[thr_id];
+	if (THREADS_PER_WARP == 0) THREADS_PER_WARP = 32; // default to 32
+	unsigned int WU_PER_WARP = THREADS_PER_WARP / THREADS_PER_WU;
 	unsigned int LOOKUP_GAP = device_lookup_gap[thr_id];
 	unsigned int BACKOFF = device_backoff[thr_id];
 	unsigned int N = (1 << (opt_nfactor+1));
@@ -450,9 +465,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 
 void cuda_scrypt_HtoD(int thr_id, uint32_t *X, int stream)
 {
-	unsigned int GRID_BLOCKS = context_blocks[thr_id];
-	unsigned int WARPS_PER_BLOCK = context_wpb[thr_id];
-	unsigned int THREADS_PER_WU = context_kernel[thr_id]->threads_per_wu();
+	unsigned int WU_PER_LAUNCH = context_wu_per_launch[thr_id];
 	unsigned int mem_size = WU_PER_LAUNCH * sizeof(uint32_t) * 32;
 
 	// copy host memory to device
@@ -481,13 +494,14 @@ void cuda_scrypt_flush(int thr_id, int stream)
 
 void cuda_scrypt_core(int thr_id, int stream, unsigned int N)
 {
-	unsigned int GRID_BLOCKS = context_blocks[thr_id];
 	unsigned int WARPS_PER_BLOCK = context_wpb[thr_id];
+	unsigned int WU_PER_BLOCK = context_wu_per_block[thr_id];
+	unsigned int WU_PER_LAUNCH = context_wu_per_launch[thr_id];
 	unsigned int THREADS_PER_WU = context_kernel[thr_id]->threads_per_wu();
 	unsigned int LOOKUP_GAP = device_lookup_gap[thr_id];
 
 	// setup execution parameters
-	// Use WU_PER_BLOCK for configurable warp size (8, 16, 24, or 32)
+	// Use WU_PER_BLOCK for configurable warp size (16 or 32)
 	dim3 grid(WU_PER_LAUNCH/WU_PER_BLOCK, 1, 1);
 	dim3 threads(THREADS_PER_WU*WU_PER_BLOCK, 1, 1);
 
@@ -498,9 +512,7 @@ void cuda_scrypt_core(int thr_id, int stream, unsigned int N)
 
 void cuda_scrypt_DtoH(int thr_id, uint32_t *X, int stream, bool postSHA)
 {
-	unsigned int GRID_BLOCKS = context_blocks[thr_id];
-	unsigned int WARPS_PER_BLOCK = context_wpb[thr_id];
-	unsigned int THREADS_PER_WU = context_kernel[thr_id]->threads_per_wu();
+	unsigned int WU_PER_LAUNCH = context_wu_per_launch[thr_id];
 	unsigned int mem_size = WU_PER_LAUNCH * sizeof(uint32_t) * (postSHA ? 8 : 32);
 	// copy result from device to host (asynchronously)
 	checkCudaErrors(cudaMemcpyAsync(X, postSHA ? context_hash[stream][thr_id] : context_odata[stream][thr_id], mem_size, cudaMemcpyDeviceToHost, context_streams[stream][thr_id]));

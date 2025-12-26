@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2010 Jeff Garzik
  * Copyright 2012-2014 pooler
  * Copyright 2014-2017 tpruvot
@@ -146,6 +146,7 @@ char *device_config[MAX_GPUS] = { 0 };
 int device_backoff[MAX_GPUS] = { 0 }; // scrypt
 int device_bfactor[MAX_GPUS] = { 0 }; // cryptonight
 int device_lookup_gap[MAX_GPUS] = { 0 };
+int device_threads_per_warp[MAX_GPUS] = { 0 };
 int device_interactive[MAX_GPUS] = { 0 };
 int opt_nfactor = 0;
 char *jane_params = NULL;
@@ -411,6 +412,7 @@ struct option options[] = {
 	{ "no-stratum", 0, NULL, 1007 },
 	{ "interactive", 1, NULL, 1050 },  // scrypt
 	{ "lookup-gap", 1, NULL, 'L' },    // scrypt
+	{ "threads-per-warp", 1, NULL, 1051 }, // scrypt
 	{ "launch-config", 1, NULL, 'l' }, // scrypt bbr xmr
 	{ "scratchpad", 1, NULL, 'k' },    // bbr
 	{ "bfactor", 1, NULL, 1055 },      // xmr
@@ -475,6 +477,8 @@ Scrypt specific options:\n\
   -L, --lookup-gap      Divides the per-hash memory requirement by this factor\n\
                         by storing only every N'th value in the scratchpad.\n\
                         Default is 1.\n\
+      --threads-per-warp comma separated list of threads per warp (16,32)\n\
+                        for each device. Default is 32.\n\
       --interactive     comma separated list of flags (0/1) specifying\n\
                         which of the CUDA device you need to run at inter-\n\
                         active frame rates (because it drives a display).\n\
@@ -2781,6 +2785,28 @@ void parse_arg(int key, char *arg)
 				device_lookup_gap[n++] = last;
 		}
 		break;
+	case 1051: /* scrypt --threads-per-warp */
+		{
+			char *pch = strtok(arg,",");
+			int n = 0, last = atoi(arg);
+			// Validate value (must be 16 or 32)
+			if (last != 16 && last != 32) {
+				applog(LOG_ERR, "Invalid threads-per-warp value %d. Must be 16 or 32.", last);
+				last = 32; // default to 32
+			}
+			while (pch != NULL) {
+				int val = atoi(pch);
+				if (val != 16 && val != 32) {
+					applog(LOG_ERR, "Invalid threads-per-warp value %d. Must be 16 or 32.", val);
+					val = 32; // default to 32
+				}
+				device_threads_per_warp[n++] = last = val;
+				pch = strtok(NULL, ",");
+			}
+			while (n < MAX_GPUS)
+				device_threads_per_warp[n++] = last;
+		}
+		break;
 	case 1050: /* scrypt --interactive */
 		{
 			char *pch = strtok(arg,",");
@@ -3286,6 +3312,7 @@ int main(int argc, char *argv[])
 		device_backoff[i] = is_windows() ? 12 : 2;
 		device_bfactor[i] = is_windows() ? 11 : 0;
 		device_lookup_gap[i] = 1;
+		device_threads_per_warp[i] = 32; // default to 32
 		device_batchsize[i] = 4194304;
 		device_interactive[i] = -1;
 		device_pstate[i] = -1;

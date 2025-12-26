@@ -18,19 +18,11 @@
 #include "salsa_kernel.h"
 #include "volta_kernel.h"
 
+// External reference to device_threads_per_warp
+extern int device_threads_per_warp[MAX_GPUS];
+
 #define THREADS_PER_WU 1  // single thread per hash
 
-// THREADS_PER_WARP is defined in salsa_kernel.h (can be 8, 16, 24, or 32)
-// This allows tuning the granularity of work units
-// Set via -DTHREADS_PER_WARP=N at compile time
-
-// Validate threads per warp at compile time
-#if (THREADS_PER_WARP != 8) && (THREADS_PER_WARP != 16) && (THREADS_PER_WARP != 24) && (THREADS_PER_WARP != 32)
-#error "THREADS_PER_WARP must be 8, 16, 24, or 32"
-#endif
-
-// Number of 8-thread tiles per virtual warp
-#define TILES_PER_VWARP (THREADS_PER_WARP / 8)
 
 // Fixed tile stride for memory layout - must be 32 to avoid overlap between tiles
 // Each tile needs 8 positions (lanes) * 4 rows = 32 positions in the strided layout
@@ -49,21 +41,24 @@
 	#define __ldg(x) (*(x))
 #endif
 
-#if !defined(__CUDA_ARCH__) ||  __CUDA_ARCH__ >= 300
+
+
+// scratchbuf constants (pointers to scratch buffer for each work unit)
+// Note: c_V stays in constant memory because it's an array of pointers that varies per virtual warp
+__constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
 
 // grab hardware lane ID (0-31 within actual warp)
 static __device__ __inline__ unsigned int __laneId() { unsigned int laneId; asm( "mov.u32 %0, %%laneid;" : "=r"( laneId ) ); return laneId; }
 
 // virtual lane ID within virtual warp (0 to THREADS_PER_WARP-1)
+template<unsigned int THREADS_PER_WARP>
 static __device__ __inline__ unsigned int __vLaneId() { return threadIdx.x % THREADS_PER_WARP; }
 
-// forward references - N_1 and spacing passed as register parameters for better performance
-__global__ void volta_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
-__global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
-
-// scratchbuf constants (pointers to scratch buffer for each work unit)
-// Note: c_V stays in constant memory because it's an array of pointers that varies per virtual warp
-__constant__ uint32_t* c_V[TOTAL_WARP_LIMIT];
+// Template kernel declarations - will be instantiated for THREADS_PER_WARP=16 and 32
+template<unsigned int THREADS_PER_WARP>
+__global__ void volta_scrypt_core_kernelA_LG_template(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
+template<unsigned int THREADS_PER_WARP>
+__global__ void volta_scrypt_core_kernelB_LG_template(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing);
 
 
 VoltaKernel::VoltaKernel() : KernelInterface()
@@ -77,15 +72,26 @@ void VoltaKernel::set_scratchbuf_constants(int MAXWARPS, uint32_t** h_V)
 
 bool VoltaKernel::run_kernel(dim3 grid, dim3 threads, int WARPS_PER_BLOCK, int thr_id, cudaStream_t stream, uint32_t* d_idata, uint32_t* d_odata, unsigned int N, unsigned int LOOKUP_GAP, bool interactive, bool benchmark)
 {
-	// Compute N_1 and spacing as register parameters (faster than constant memory)
+	// Compute N_1 and spacing
 	uint32_t N_1 = N - 1;
 	uint32_t spacing = (N + LOOKUP_GAP - 1) / LOOKUP_GAP;
+	uint32_t threads_per_warp = device_threads_per_warp[thr_id];
 
-	// First phase: Sequential writes to scratchpad.
-	volta_scrypt_core_kernelA_LG<<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
-
-	// Second phase: Random read access from scratchpad.
-	volta_scrypt_core_kernelB_LG<<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
+	// Dispatch to the appropriate compiled kernel version
+	if (threads_per_warp == 16) {
+		// First phase: Sequential writes to scratchpad.
+		volta_scrypt_core_kernelA_LG_template<16><<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
+		// Second phase: Random read access from scratchpad.
+		volta_scrypt_core_kernelB_LG_template<16><<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
+	} else if (threads_per_warp == 32) {
+		// First phase: Sequential writes to scratchpad.
+		volta_scrypt_core_kernelA_LG_template<32><<< grid, threads, 0, stream >>>(d_idata, N, LOOKUP_GAP, N_1, spacing);
+		// Second phase: Random read access from scratchpad.
+		volta_scrypt_core_kernelB_LG_template<32><<< grid, threads, 0, stream >>>(d_odata, N, LOOKUP_GAP, N_1, spacing);
+	} else {
+		applog(LOG_ERR, "GPU #%d: Unsupported THREADS_PER_WARP=%u (only 16 and 32 are supported)", device_map[thr_id], threads_per_warp);
+		return false;
+	}
 
 	return true;
 }
@@ -109,9 +115,10 @@ __device__ __forceinline__ uint4 shfl4(const uint4 val, unsigned int lane, unsig
 	);
 }
 
+template<unsigned int THREADS_PER_WARP>
 __device__ __forceinline__ void __transposed_write_BC(uint4 (&B)[4], uint4 (&C)[4], uint4 *D, int spacing)
 {
-	unsigned int vLaneId = __vLaneId();
+	unsigned int vLaneId = __vLaneId<THREADS_PER_WARP>();
 
 	unsigned int lane8 = vLaneId % 8;
 	unsigned int tile  = vLaneId / 8;  // 0 to (TILES_PER_VWARP-1)
@@ -186,9 +193,10 @@ __device__ __forceinline__ void __transposed_write_BC(uint4 (&B)[4], uint4 (&C)[
 	D[spacing*2*(TILE_STRIDE*tile+28)+(lane8+1)%8] = T2[0];
 }
 
+template<unsigned int THREADS_PER_WARP>
 __device__ __forceinline__ void __transposed_read_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
 {
-	unsigned int vLaneId = __vLaneId();
+	unsigned int vLaneId = __vLaneId<THREADS_PER_WARP>();
 
 	unsigned int lane8 = vLaneId % 8;
 	unsigned int tile  = vLaneId / 8;  // 0 to (TILES_PER_VWARP-1)
@@ -238,10 +246,11 @@ __device__ __forceinline__ void __transposed_read_BC(const uint4 *S, uint4 (&B)[
 
 }
 
+template<unsigned int THREADS_PER_WARP>
 __device__ __forceinline__ void __transposed_xor_BC(const uint4 *S, uint4 (&B)[4], uint4 (&C)[4], int spacing, int row)
 {
 	uint4 BT[4], CT[4];
-	__transposed_read_BC(S, BT, CT, spacing, row);
+	__transposed_read_BC<THREADS_PER_WARP>(S, BT, CT, spacing, row);
 
 #pragma unroll 4
 	for(int n = 0; n < 4; n++)
@@ -317,10 +326,10 @@ static __device__ __forceinline__ void xor_chacha8(uint4 *B, uint4 *C)
 //! @param g_idata  input data in global memory
 //! @param g_odata  output data in global memory
 //! 
-//! Modified to support configurable threads per warp (8, 16, 24, 32)
-//! Use THREADS_PER_WARP to tune the granularity of work units.
+//! Template version with THREADS_PER_WARP as compile-time constant for optimization
 ////////////////////////////////////////////////////////////////////////////////
-__global__ void volta_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
+template<unsigned int THREADS_PER_WARP>
+__global__ void volta_scrypt_core_kernelA_LG_template(uint32_t *g_idata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
@@ -332,18 +341,20 @@ __global__ void volta_scrypt_core_kernelA_LG(uint32_t *g_idata, int iterations, 
 	uint32_t * V = c_V[vwarp_id];
 	uint4 B[4], C[4];
 
-	__transposed_read_BC((uint4*)g_idata, B, C, 1, 0);
-	__transposed_write_BC(B, C, (uint4*)V, spacing);
+	__transposed_read_BC<THREADS_PER_WARP>((uint4*)g_idata, B, C, 1, 0);
+	__transposed_write_BC<THREADS_PER_WARP>(B, C, (uint4*)V, spacing);
 
 	for (int i = 1; i < iterations; i++) {
 		xor_chacha8(B, C); xor_chacha8(C, B);
 		if (i % LOOKUP_GAP == 0)
 		  // Stride between scratchpad rows: 8 uint4 = 32 uint32_t per row
-		  __transposed_write_BC(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), spacing);
+		  __transposed_write_BC<THREADS_PER_WARP>(B, C, (uint4*)(V + (i/LOOKUP_GAP)*32), spacing);
 	}
 }
 
-__global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
+
+template<unsigned int THREADS_PER_WARP>
+__global__ void volta_scrypt_core_kernelB_LG_template(uint32_t *g_odata, int iterations, unsigned int LOOKUP_GAP, uint32_t N_1, uint32_t spacing)
 {
 	// Calculate warp ID (global index of this warp)
 	int vwarp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
@@ -356,7 +367,7 @@ __global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, 
 	uint4 B[4], C[4];
 
 	int pos = N_1/LOOKUP_GAP, loop = 1 + (N_1-pos*LOOKUP_GAP);
-	__transposed_read_BC((uint4*)V, B, C, spacing, pos);
+	__transposed_read_BC<THREADS_PER_WARP>((uint4*)V, B, C, spacing, pos);
 	while(loop--) { xor_chacha8(B, C); xor_chacha8(C, B); }
 
 	for (int i = 0; i < iterations; i++)  {
@@ -365,15 +376,13 @@ __global__ void volta_scrypt_core_kernelB_LG(uint32_t *g_odata, int iterations, 
 		// based on each thread's slot value - this is a vectorized gather pattern
 		int slot = C[0].x & N_1;
 		int pos = slot/LOOKUP_GAP, loop = slot-pos*LOOKUP_GAP;
-		uint4 b[4], c[4]; __transposed_read_BC((uint4*)(V), b, c, spacing, pos);
+		uint4 b[4], c[4]; __transposed_read_BC<THREADS_PER_WARP>((uint4*)(V), b, c, spacing, pos);
 		while(loop--) { xor_chacha8(b, c); xor_chacha8(c, b); }
 #pragma unroll 4
 		for(int n = 0; n < 4; n++) { B[n] ^= b[n]; C[n] ^= c[n]; }
 		xor_chacha8(B, C); xor_chacha8(C, B);
 	}
 
-	__transposed_write_BC(B, C, (uint4*)(g_odata), 1);
+	__transposed_write_BC<THREADS_PER_WARP>(B, C, (uint4*)(g_odata), 1);
 }
-
-#endif /* prevent SM 2 */
 
