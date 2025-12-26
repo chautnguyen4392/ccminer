@@ -17,7 +17,6 @@ extern short device_map[MAX_GPUS];
 extern int device_batchsize[MAX_GPUS]; // cudaminer -b
 extern int device_interactive[MAX_GPUS]; // cudaminer -i
 extern int device_texturecache[MAX_GPUS]; // cudaminer -C
-extern int device_singlememory[MAX_GPUS]; // cudaminer -m
 extern int device_lookup_gap[MAX_GPUS]; // -L
 extern int device_backoff[MAX_GPUS]; // WIN32/LINUX var
 extern char *device_config[MAX_GPUS]; // -l
