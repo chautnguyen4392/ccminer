@@ -286,41 +286,55 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  * and similarly for kx.
  */
 
-__global__
-void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
-{
-	// Copy from constant memory c_V to shared memory s_V for this block's warps
-	int warp_id = threadIdx.x / 32;
-	int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-	if (threadIdx.x % 32 == 0) {
-		s_V[warp_id] = c_V[global_warp_id];
-	}
-	__syncthreads();
-
-	uint4 b, bx;
-
-	int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
-	int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
-	int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
-
-	int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
-	int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
-	int i = 0;
-
-	if (iterations <= 0)
-		return;
-
-	load_key(d_idata, b, bx);
-	write_keys_direct(b, bx, start);
-	++i;
-
-	while (i < iterations) {
-		chacha_xor_core(b, bx, x1, x2, x3);
-		if (i % LOOKUP_GAP == 0)
-			write_keys_direct(b, bx, start+32*(i/LOOKUP_GAP));
-		++i;
-	}
-}
+ __global__
+ void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
+ {
+	 // Copy from constant memory c_V to shared memory s_V for this block's warps
+	 int warp_id = threadIdx.x / 32;
+	 int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+	 if (threadIdx.x % 32 == 0) {
+		 s_V[warp_id] = c_V[global_warp_id];
+	 }
+	 __syncthreads();
+ 
+	 uint4 b, bx;
+ 
+	 int x1 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+1)&0x3);
+	 int x2 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+2)&0x3);
+	 int x3 = (threadIdx.x & 0x1c) + (((threadIdx.x & 0x03)+3)&0x3);
+ 
+	 int scrypt_block = (blockIdx.x*blockDim.x + threadIdx.x)/THREADS_PER_WU;
+	 int start = (scrypt_block*c_SCRATCH + 4*(threadIdx.x%4)) % c_SCRATCH_WU_PER_WARP;
+ 
+	 if (iterations <= 0)
+		 return;
+ 
+	 load_key(d_idata, b, bx);
+	 write_keys_direct(b, bx, start);
+ 
+	 // Optimized loop: avoid checking i % LOOKUP_GAP on every iteration
+	 int remaining = iterations - 1;
+	 int full_blocks = remaining / LOOKUP_GAP;
+	 int remainder = remaining % LOOKUP_GAP;
+	 int write_idx = 1;  // First write will be at i=LOOKUP_GAP, so write_idx=1
+ 
+	 // Process full LOOKUP_GAP blocks
+	 for (int block = 0; block < full_blocks; block++) {
+		 // Process LOOKUP_GAP iterations
+		 #pragma unroll
+		 for (int j = 0; j < LOOKUP_GAP; j++) {
+			 chacha_xor_core(b, bx, x1, x2, x3);
+		 }
+		 // Write after processing this block
+		 write_keys_direct(b, bx, start+32*write_idx);
+		 write_idx++;
+	 }
+ 
+	 // Process remaining iterations
+	 for (int j = 0; j < remainder; j++) {
+		 chacha_xor_core(b, bx, x1, x2, x3);
+	 }
+ }
 
 
 /*
