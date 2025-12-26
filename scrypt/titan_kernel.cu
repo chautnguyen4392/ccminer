@@ -111,7 +111,7 @@ void stcg_uint4(uint4* ptr, const uint4 &v)
 __device__ __forceinline__
 void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 {
-	uint32_t *scratch = s_V[threadIdx.x/32];
+	uint32_t *scratch = s_V[threadIdx.x/THREADS_PER_WARP];
 	stcg_uint4((uint4 *)(&scratch[start   ]), b);
 	stcg_uint4((uint4 *)(&scratch[start+16]), bx);
 }
@@ -119,7 +119,7 @@ void write_keys_direct(const uint4 &b, const uint4 &bx, uint32_t start)
 __device__ __forceinline__
 void read_keys_direct(uint4 &b, uint4 &bx, uint32_t start)
 {
-	uint32_t *scratch = s_V[threadIdx.x/32];
+	uint32_t *scratch = s_V[threadIdx.x/THREADS_PER_WARP];
 	// Use __ldg() for read-only cache optimization (Pascal+)
 	b = ldcg_uint4((uint4 *)(&scratch[start]));
 	bx = ldcg_uint4((uint4 *)(&scratch[start+16]));
@@ -290,9 +290,9 @@ void chacha_xor_core(uint4 &b, uint4 &bx, const int x1, const int x2, const int 
  void titan_scrypt_core_kernelA_LG(const uint32_t *d_idata, int iterations, unsigned int LOOKUP_GAP)
  {
 	 // Copy from constant memory c_V to shared memory s_V for this block's warps
-	 int warp_id = threadIdx.x / 32;
-	 int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-	 if (threadIdx.x % 32 == 0) {
+	 int warp_id = threadIdx.x / THREADS_PER_WARP;
+	 int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
+	 if (threadIdx.x % THREADS_PER_WARP == 0) {
 		 s_V[warp_id] = c_V[global_warp_id];
 	 }
 	 __syncthreads();
@@ -347,9 +347,9 @@ __global__
 void titan_scrypt_core_kernelB_LG(uint32_t *d_odata, int iterations, unsigned int LOOKUP_GAP)
 {
 	// Copy from constant memory c_V to shared memory s_V for this block's warps
-	int warp_id = threadIdx.x / 32;
-	int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
-	if (threadIdx.x % 32 == 0) {
+	int warp_id = threadIdx.x / THREADS_PER_WARP;
+	int global_warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / THREADS_PER_WARP;
+	if (threadIdx.x % THREADS_PER_WARP == 0) {
 		s_V[warp_id] = c_V[global_warp_id];
 	}
 	__syncthreads();
